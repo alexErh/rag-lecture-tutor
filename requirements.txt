@@ -2,3 +2,5 @@ langchain_ollama
 langchain_openai
 langchain
 python-dotenv
+chromadb
+langchain_text_splitters
