@@ -1,3 +1,5 @@
 venv
 .venv
 .idea
+.env
+global_variables.py
