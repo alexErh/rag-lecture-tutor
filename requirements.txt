@@ -4,3 +4,4 @@ langchain
 python-dotenv
 chromadb
 langchain_text_splitters
+fastapi
