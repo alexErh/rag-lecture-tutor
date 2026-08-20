@@ -40,7 +40,7 @@ def chunk_file(path: str):
 
     return simple_chunker.split_documents([document])
 
-
+# Lese Path von Markdown ein um es Chunken zu lassen und in die DB zu speichern
 def add_document(path: str):
     chunks = chunk_file(path)
 
@@ -50,8 +50,9 @@ def add_document(path: str):
         metadatas=[chunk.metadata for chunk in chunks],
     )
 
-
+# Bekommt den Prompt als Query und gibt die passenden Chunks zurück
 def retrieve_chunks(query: str, n: int = 3):
+    # eventuell retreival anpassen/verbessern
     return collection.query(
         query_texts=[query],
         n_results=n
