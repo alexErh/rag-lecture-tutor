@@ -1,5 +1,7 @@
 import chromadb
+import re
 import uuid
+from pathlib import Path
 
 from fastapi import FastAPI
 from pydantic import BaseModel
@@ -11,7 +13,10 @@ from langchain_core.documents import Document
 
 # ========= CHROMA =========
 
-client = chromadb.PersistentClient(path="./VectorDB")
+# Absoluter Pfad (relativ zu dieser Datei), damit Server und Notebook-Ingest
+# dieselbe DB nutzen – unabhängig vom aktuellen Arbeitsverzeichnis.
+_BASE_DIR = Path(__file__).resolve().parent
+client = chromadb.PersistentClient(path=str(_BASE_DIR / "VectorDB"))
 
 collection = client.get_or_create_collection(
     name="VectorDB",
@@ -27,18 +32,67 @@ simple_chunker = RecursiveCharacterTextSplitter(
 )
 
 
+# ========= FORMEL-SCHUTZ =========
+# Formeln (LaTeX) sollen beim Chunking nicht zerschnitten werden. Dazu werden sie
+# vor dem Splitten durch kurze Platzhalter ersetzt (die keine Trennzeichen des
+# Splitters enthalten) und nach dem Splitten in jedem Chunk wiederhergestellt.
+
+# Reihenfolge: Block-Formeln zuerst, damit einzelne $ danach als inline gelten.
+_MATH_PATTERNS = [
+    re.compile(r"\$\$.*?\$\$", re.DOTALL),   # Block:  $$ ... $$
+    re.compile(r"\\\[.*?\\\]", re.DOTALL),   # Block:  \[ ... \]
+    re.compile(r"\\\(.*?\\\)", re.DOTALL),   # Inline: \( ... \)
+]
+
+# Platzhalter aus Zeichen, die NICHT in den Splitter-Separatoren vorkommen
+# (kein Leerzeichen, kein Zeilenumbruch, kein ". "). Ohne diese Trennzeichen kann
+# der RecursiveCharacterTextSplitter den Platzhalter nicht in der Mitte trennen –
+# im Extremfall entsteht ein etwas zu großer Chunk, die Formel bleibt aber ganz.
+_PLACEHOLDER = "⟦MATH{}⟧"  # ⟦MATH0⟧, ⟦MATH1⟧, ...
+
+
+def _mask_math(text: str):
+    """Ersetzt Formeln durch Platzhalter. Gibt (maskierter_text, formeln) zurück."""
+    formulas: list[str] = []
+
+    def _replace(match: re.Match) -> str:
+        index = len(formulas)
+        formulas.append(match.group(0))
+        return _PLACEHOLDER.format(index)
+
+    for pattern in _MATH_PATTERNS:
+        text = pattern.sub(_replace, text)
+    return text, formulas
+
+
+def _unmask_math(text: str, formulas: list[str]) -> str:
+    """Setzt die ursprünglichen Formeln wieder ein."""
+    for index, formula in enumerate(formulas):
+        text = text.replace(_PLACEHOLDER.format(index), formula)
+    return text
+
+
 # ========= FUNCTIONS =========
 
 def chunk_file(path: str):
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
 
+    # Formeln vor dem Splitten schützen ...
+    masked_text, formulas = _mask_math(text)
+
     document = Document(
-        page_content=text,
+        page_content=masked_text,
         metadata={"source": path}
     )
 
-    return simple_chunker.split_documents([document])
+    chunks = simple_chunker.split_documents([document])
+
+    # ... und in jedem Chunk wiederherstellen.
+    for chunk in chunks:
+        chunk.page_content = _unmask_math(chunk.page_content, formulas)
+
+    return chunks
 
 # Lese Path von Markdown ein um es Chunken zu lassen und in die DB zu speichern
 def add_document(path: str):
