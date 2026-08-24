@@ -14,3 +14,9 @@ server/data/processed/*
 # Hochzuladende PDFs (Client-Ordner) nicht committen; nur den Ordner behalten
 input_pdfs/*
 !input_pdfs/.gitkeep
+
+# Python-Bytecode-Cache
+__pycache__/
+
+# Generierte Vektor-DB (ChromaDB) nicht committen
+server/VectorDB/

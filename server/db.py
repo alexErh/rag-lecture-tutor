@@ -50,7 +50,7 @@ collection = client.get_or_create_collection(
 # ========= CHUNKER =========
 
 simple_chunker = RecursiveCharacterTextSplitter(
-    chunk_size=100,
+    chunk_size=200,
     chunk_overlap=20,
     separators=["\n\n", "\n", ". ", " "]
 )
@@ -144,6 +144,25 @@ def retrieve_chunks(query: str, n: int = 3):
         n_results=n
     )
 
+def retrieve_through_metadata(filename: str):
+    results = collection.get(
+        include=["documents", "metadatas"]
+    )
+
+    filtered = [
+        (document, metadata)
+        for document, metadata in zip(
+            results["documents"],
+            results["metadatas"]
+        )
+        if metadata.get("source", "").endswith(filename)
+    ]
+
+    return {
+        "documents": [document for document, _ in filtered],
+        "metadatas": [metadata for _, metadata in filtered],
+    }
+
 
 # ========= AGENT =========
 # Der Agent wird beim Import (und damit beim API-Start) aufgebaut. Er nutzt ein
@@ -153,20 +172,64 @@ SYSTEM_PROMPT = (
     "Du bist ein Tutor für Vorlesungsinhalte. Beantworte Fragen nur auf Basis des "
     "bereitgestellten Kontexts. Erkläre klar, korrekt und verständlich. Wenn "
     "Informationen fehlen oder unsicher sind, sage das ausdrücklich. Erfinde nichts "
-    "und spekuliere nicht. Nutze Fachbegriffe korrekt und erkläre sie kurz, wenn nötig."
+    "und spekuliere nicht. Nutze Fachbegriffe korrekt und erkläre sie kurz, wenn nötig. "
+    "Gib, falls Informationen aus der Funktion search_lecture_docs entnommen werden – das "
+    "heißt, dass die Informationen aus einer Datei kommen –, immer den Dateipfad in "
+    "folgendem Format an: *Quelle*: `quelle`. Beispiel: *Quelle*: `data/raw/somefile.txt`"
 )
 
 # LOCAL=true -> lokales Ollama-Modell; LOCAL=false -> Nvidia NIM API.
 LOCAL = os.getenv("LOCAL", "true").strip().lower() in ("1", "true", "yes", "ja")
 
 
-@tool("search_lecture_docs", description="Retrieves information from Lecture related Documents")
+@tool(
+    "search_lecture_docs",
+    description=(
+        "Searches the lecture documents using semantic similarity and retrieves the "
+        "most relevant text chunks for answering the user's question. Use this tool when "
+        "the user asks a question that requires information from the lecture documents. "
+        "The `query` parameter must contain a concise semantic search query representing "
+        "the user's information need. Query rules: preserve important technical terms, "
+        "concepts, names and keywords; do not include instructions to the assistant, "
+        "unnecessary conversational text or the user's entire conversation; formulate the "
+        "query so that it is useful for semantic vector search; for conceptual questions "
+        "keep the important concepts from the original question. Examples: "
+        "User: 'Was ist Retrieval Augmented Generation?' -> query: 'Retrieval Augmented "
+        "Generation'. User: 'Wie funktioniert der RecursiveCharacterTextSplitter?' -> "
+        "query: 'RecursiveCharacterTextSplitter Funktionsweise'. If the user explicitly "
+        "asks about a specific file, DO NOT use this tool to retrieve all chunks of that "
+        "file; use the get_file_info tool instead. This tool performs semantic similarity "
+        "search; it does not search metadata or retrieve all chunks belonging to a file."
+    ),
+)
 def search_lecture_docs(query: str):
-    """Holt die passenden Chunks direkt aus der Vektor-DB."""
+    """Holt die passenden Chunks per semantischer Suche aus der Vektor-DB."""
     results = retrieve_chunks(query, 3)
     return {
         "documents": results["documents"],
         "distances": results["distances"],
+        "metadatas": results["metadatas"],
+    }
+
+
+@tool(
+    "get_file_info",
+    description=(
+        "Retrieves all information/chunks from a specific lecture document. IMPORTANT: "
+        "the `filename` parameter MUST contain ONLY the filename explicitly mentioned by "
+        "the user, including its file extension, never the user's complete question, "
+        "extra words (such as 'Was steht in', 'Datei', 'Inhalt von') or a file path. "
+        "Examples: 'Was steht in example.md?' -> filename: 'example.md'. "
+        "'Erkläre mir den Inhalt von lecture_03.pdf.' -> filename: 'lecture_03.pdf'. "
+        "Use this tool ONLY when the user explicitly identifies a specific file; if no "
+        "specific filename is mentioned, do not use this tool."
+    ),
+)
+def get_file_info(filename: str):
+    """Holt alle Chunks einer bestimmten Datei über den Metadaten-Filter."""
+    results = retrieve_through_metadata(filename)
+    return {
+        "documents": results["documents"],
         "metadatas": results["metadatas"],
     }
 
@@ -186,7 +249,7 @@ def _build_model():
 
 agent = create_agent(
     _build_model(),
-    tools=[search_lecture_docs],
+    tools=[search_lecture_docs, get_file_info],
     system_prompt=SYSTEM_PROMPT,
 )
 
@@ -199,6 +262,30 @@ def ask_agent(query: str) -> str:
 
 # ========= API =========
 
+def _ollama_keep_alive(keep_alive, timeout: int = 300) -> str:
+    """Sendet eine Leer-Anfrage an Ollama, um das Modell zu laden bzw. zu entladen.
+
+    keep_alive=-1 lädt das Modell und hält es im Speicher; keep_alive=0 entlädt es
+    sofort. Gibt den Modellnamen zurück.
+    """
+    import json
+    import urllib.request
+
+    base_url = os.getenv("LOCAL_BASE_URL", "http://localhost:11434")
+    model_name = os.getenv("LOCAL_MODEL_NAME", "llama3.2:3b")
+    payload = json.dumps(
+        {"model": model_name, "prompt": "", "keep_alive": keep_alive}
+    ).encode("utf-8")
+    request = urllib.request.Request(
+        f"{base_url}/api/generate",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as resp:
+        resp.read()
+    return model_name
+
+
 def _warmup_ollama() -> None:
     """Lädt das lokale Ollama-Modell beim Start in den Speicher (keep_alive=-1).
 
@@ -207,35 +294,36 @@ def _warmup_ollama() -> None:
     """
     if not LOCAL:
         return
-
-    import json
-    import urllib.request
-
-    base_url = os.getenv("LOCAL_BASE_URL", "http://localhost:11434")
-    model_name = os.getenv("LOCAL_MODEL_NAME", "llama3.2:3b")
-    payload = json.dumps(
-        {"model": model_name, "prompt": "", "keep_alive": -1}
-    ).encode("utf-8")
-    request = urllib.request.Request(
-        f"{base_url}/api/generate",
-        data=payload,
-        headers={"Content-Type": "application/json"},
-    )
     try:
-        print(f"[startup] Lade Ollama-Modell '{model_name}' vor ...")
-        with urllib.request.urlopen(request, timeout=300) as resp:
-            resp.read()
+        print("[startup] Lade Ollama-Modell vor ...")
+        model_name = _ollama_keep_alive(-1, timeout=300)
         print(f"[startup] Ollama-Modell '{model_name}' geladen und bereit.")
     except Exception as exc:
         print(f"[startup] Warmup übersprungen (läuft Ollama?): {exc}")
 
 
+def _unload_ollama() -> None:
+    """Entlädt das lokale Ollama-Modell beim Herunterfahren aus dem Speicher.
+
+    Gibt den RAM wieder frei (keep_alive=0). Nur im lokalen Modus; scheitert leise.
+    """
+    if not LOCAL:
+        return
+    try:
+        print("[shutdown] Entlade Ollama-Modell ...")
+        model_name = _ollama_keep_alive(0, timeout=30)
+        print(f"[shutdown] Ollama-Modell '{model_name}' entladen.")
+    except Exception as exc:
+        print(f"[shutdown] Entladen übersprungen: {exc}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Beim API-Start ausführen ...
+    # Beim API-Start: Modell vorladen ...
     _warmup_ollama()
     yield
-    # ... beim Herunterfahren gäbe es hier Platz für Cleanup.
+    # ... beim Herunterfahren: Modell wieder entladen.
+    _unload_ollama()
 
 
 app = FastAPI(lifespan=lifespan)
@@ -244,6 +332,9 @@ app = FastAPI(lifespan=lifespan)
 class QueryRequest(BaseModel):
     query: str
     n: int = 3
+
+class FileRequest(BaseModel):
+    filename: str
 
 
 class AskRequest(BaseModel):
@@ -256,10 +347,18 @@ def query(request: QueryRequest):
         request.query,
         request.n
     )
-
     return {
         "documents": results["documents"],
         "distances": results["distances"],
+        "metadatas": results["metadatas"],
+    }
+
+
+@app.post("/document")
+def get_filechunks(request: FileRequest):
+    results = retrieve_through_metadata(request.filename)
+    return {
+        "documents": results["documents"],
         "metadatas": results["metadatas"],
     }
 
@@ -333,11 +432,16 @@ def ingest(
     }
 
 if __name__ == "__main__":
-    import uvicorn
+    # Debug toggle. True = Normales Starten des Servers, False = Beliebige Funktionen ausführen
+    if(True):
+        import uvicorn
 
-    uvicorn.run(
-        "db:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=True
-    )
+        uvicorn.run(
+            "db:app",
+            host="127.0.0.1",
+            port=8000,
+            reload=True
+        )
+    else:
+
+        add_document("data/processed/example.md")
