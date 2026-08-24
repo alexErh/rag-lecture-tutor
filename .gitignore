@@ -2,4 +2,21 @@ venv
 .venv
 .idea
 .env
-global_variables.py
+
+# Rohdaten (PDFs) nicht committen; nur den Ordner via .gitkeep behalten
+server/data/raw/*
+!server/data/raw/.gitkeep
+
+# Konvertierte Markdown-Dateien nicht committen – Ausnahme: example.md
+server/data/processed/*
+!server/data/processed/example.md
+
+# Hochzuladende PDFs (Client-Ordner) nicht committen; nur den Ordner behalten
+input_pdfs/*
+!input_pdfs/.gitkeep
+
+# Python-Bytecode-Cache
+__pycache__/
+
+# Generierte Vektor-DB (ChromaDB) nicht committen
+server/VectorDB/
