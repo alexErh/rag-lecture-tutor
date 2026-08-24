@@ -6,3 +6,5 @@ chromadb
 langchain_text_splitters
 fastapi
 docling
+sentence-transformers
+python-multipart
