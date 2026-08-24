@@ -43,7 +43,9 @@ def chunk_file(path: str):
 # Lese Path von Markdown ein um es Chunken zu lassen und in die DB zu speichern
 def add_document(path: str):
     chunks = chunk_file(path)
-
+    for chunk in chunks:
+        print('\n ================')
+        print(chunk.metadata)
     collection.add(
         ids=[str(uuid.uuid4()) for _ in chunks],
         documents=[chunk.page_content for chunk in chunks],
@@ -75,7 +77,7 @@ def query(request: QueryRequest):
         request.query,
         request.n
     )
-
+    print(results["metadatas"])
     return {
         "documents": results["documents"],
         "distances": results["distances"],
@@ -83,11 +85,17 @@ def query(request: QueryRequest):
     }
 
 if __name__ == "__main__":
-    import uvicorn
+    if(True):
+        import uvicorn
 
-    uvicorn.run(
-        "db:app",
-        host="127.0.0.1",
-        port=8000,
-        reload=True
-    )
+        uvicorn.run(
+            "db:app",
+            host="127.0.0.1",
+            port=8000,
+            reload=True
+        )
+    else:
+        print(collection.query(
+        query_texts=['Können sich Mitarbeiter Weiterbilden?'],
+        n_results=3
+    ))
