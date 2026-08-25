@@ -31,8 +31,15 @@ from database import (
 # Agent (Fragen beantworten)
 from agent import ask_agent
 
-# Ollama-Lebenszyklus
-from ollama_lifecycle import warmup_ollama, unload_ollama
+# Ollama-Lebenszyklus (optional: Modul darf fehlen -> No-op-Fallback)
+try:
+    from ollama_lifecycle import warmup_ollama, unload_ollama
+except ImportError:
+    def warmup_ollama() -> None:
+        pass
+
+    def unload_ollama() -> None:
+        pass
 
 
 @asynccontextmanager
