@@ -1,7 +1,7 @@
 """PDF-Dateien mit docling einlesen und nach Markdown umwandeln.
 
 Liest PDFs aus  server/data/raw/  und speichert das Ergebnis als Markdown in
-server/data/processed/. Diese Markdown-Dateien können anschließend von db.py
+server/data/processed/. Diese Markdown-Dateien können anschließend von database.py
 (add_document) gechunkt und in die Vektor-DB geschrieben werden.
 
 Vorerst OHNE Bilder: die Standard-docling-Konvertierung extrahiert Text und
