@@ -32,19 +32,13 @@ from database import (
 from agent import ask_agent
 
 # Ollama-Lebenszyklus
-from ollama_lifecycle import warmup_ollama, unload_ollama
+#from ollama_lifecycle import warmup_ollama, unload_ollama
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Beim API-Start: Modell vorladen ...
-    warmup_ollama()
-    yield
-    # ... beim Herunterfahren: Modell wieder entladen.
-    unload_ollama()
 
 
-app = FastAPI(lifespan=lifespan)
+
+app = FastAPI()
 
 
 class QueryRequest(BaseModel):
@@ -84,6 +78,7 @@ def get_filechunks(request: FileRequest):
 # Stellt dem Backend-Agenten eine Frage und gibt die generierte Antwort zurück.
 @app.post("/ask")
 def ask(request: AskRequest):
+
     answer = ask_agent(request.query)
     return {"answer": answer}
 

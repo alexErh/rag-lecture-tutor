@@ -18,19 +18,33 @@ from database import retrieve_chunks, retrieve_through_metadata
 load_dotenv()
 
 
-SYSTEM_PROMPT = (
-    "Du bist ein Tutor für Vorlesungsinhalte. Beantworte Fragen nur auf Basis des "
-    "bereitgestellten Kontexts. Erkläre klar, korrekt und verständlich. Wenn "
-    "Informationen fehlen oder unsicher sind, sage das ausdrücklich. Erfinde nichts "
-    "und spekuliere nicht. Nutze Fachbegriffe korrekt und erkläre sie kurz, wenn nötig. "
-    "Gib, falls Informationen aus der Funktion search_lecture_docs entnommen werden – das "
-    "heißt, dass die Informationen aus einer Datei kommen –, immer den Dateipfad in "
-    "folgendem Format an: *Quelle*: `quelle`. Beispiel: *Quelle*: `data/raw/somefile.txt`"
-)
+SYSTEM_PROMPT = """
+Du bist ein Tutor für Vorlesungsinhalte.
+
+Beantworte die Frage ausschließlich anhand der Informationen,
+die du aus den Retrieval-Tools erhältst.
+
+Wenn die Frage Informationen aus den Vorlesungsunterlagen benötigt,
+musst du zuerst das passende Retrieval-Tool verwenden.
+
+WICHTIG:
+- Nach einem Tool-Aufruf musst du das Tool-Ergebnis auswerten.
+- Gib niemals den Tool-Aufruf selbst als Antwort an den Benutzer.
+- Gib niemals die interne Tool-Ausgabe oder deren JSON-Struktur als Antwort aus.
+- Formuliere stattdessen eine normale, verständliche Antwort.
+- Wenn der Kontext die Frage nicht beantwortet, sage ausdrücklich,
+  dass die Information in den bereitgestellten Unterlagen nicht gefunden wurde.
+- Erfinde keine Informationen.
+
+Wenn du Informationen aus `search_lecture_docs` verwendest,
+nenne anschließend die verwendete Quelle im Format:
+
+*Quelle*: `data/raw/datei.txt`
+"""
 
 # LOCAL=true -> lokales Ollama-Modell; LOCAL=false -> Nvidia NIM API.
 LOCAL = os.getenv("LOCAL", "true").strip().lower() in ("1", "true", "yes", "ja")
-
+print(LOCAL)
 
 @tool(
     "search_lecture_docs",
@@ -87,8 +101,8 @@ def get_file_info(filename: str):
 def _build_model():
     if LOCAL:
         return ChatOllama(
-            base_url=os.getenv("LOCAL_BASE_URL", "http://localhost:11434"),
-            model=os.getenv("LOCAL_MODEL_NAME", "llama3.2:3b"),
+            base_url=os.getenv("LOCAL_BASE_URL"),
+            model=os.getenv("LOCAL_MODEL_NAME"),
         )
     return ChatOpenAI(
         model="meta/llama-3.1-8b-instruct",
