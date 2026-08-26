@@ -33,7 +33,8 @@ SYSTEM_PROMPT = (
     "Du bist ein Tutor für Vorlesungsinhalte. Beantworte Fragen nur auf Basis des "
     "bereitgestellten Kontexts. Erkläre klar, korrekt und verständlich. Wenn "
     "Informationen fehlen oder unsicher sind, sage das ausdrücklich. Erfinde nichts "
-    "und spekuliere nicht. Nutze Fachbegriffe korrekt und erkläre sie kurz, wenn nötig. "
+    "und spekuliere nicht. Nutze Fachbegriffe korrekt und erkläre sie kurz, wenn nötig. Ausgaben sollen im Markdown-Format "
+    "sein, sodass man es in einem Markdown-Reader anzeigen könnte. Formelblöcke also mit $$ darstellen."
     "Gib, falls Informationen aus der Funktion search_lecture_docs entnommen werden – das "
     "heißt, dass die Informationen aus einer Datei kommen –, immer den Dateipfad in "
     "folgendem Format an: *Quelle*: `quelle`. Beispiel: *Quelle*: `data/raw/somefile.txt`"
@@ -65,7 +66,7 @@ LOCAL = os.getenv("LOCAL", "true").strip().lower() in ("1", "true", "yes", "ja")
 )
 def search_lecture_docs(query: str):
     """Holt die passenden Chunks per semantischer Suche aus der Vektor-DB."""
-    results = retrieve_chunks(query, 3, method=_request_method.get())
+    results = retrieve_chunks(query, 5, method=_request_method.get())
     return {
         "documents": results["documents"],
         "distances": results["distances"],
@@ -115,11 +116,12 @@ agent = create_agent(
 )
 
 
-def ask_agent(query: str, method: "str | ChunkingMethod | None" = None) -> str:
+def ask_agent(messages, method: "str | ChunkingMethod | None" = None) -> str:
     """Stellt dem Agenten eine Frage und gibt die Antwort als Text zurück.
+    Der Kontext (Chat-Verlauf) wird mit der Frage geschickt.
 
     Args:
-        query: Die Nutzerfrage.
+        messages: Die Nutzerfrage mit Kontext.
         method: Optionale Chunking-Methode; die Retrieval-Tools suchen dann nur in
             den Chunks dieser Methode. None -> methodenübergreifend.
     """
@@ -127,7 +129,7 @@ def ask_agent(query: str, method: "str | ChunkingMethod | None" = None) -> str:
         method = ChunkingMethod.from_value(method)
     token = _request_method.set(method)
     try:
-        result = agent.invoke({"messages": [("user", query)]})
+        result = agent.invoke({"messages": messages})
     finally:
         _request_method.reset(token)
     return result["messages"][-1].content
