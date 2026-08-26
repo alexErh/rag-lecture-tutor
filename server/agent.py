@@ -4,6 +4,7 @@ Der Agent wird beim Import (und damit beim API-Start) aufgebaut. Er nutzt
 Retrieval-Tools, die DIREKT in-process auf die DB zugreifen (kein HTTP-Umweg).
 """
 
+import contextvars
 import os
 
 from dotenv import load_dotenv
@@ -12,10 +13,20 @@ from langchain.tools import tool
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
+from chunking import ChunkingMethod
 from database import retrieve_chunks, retrieve_through_metadata
 
 # .env laden (LOCAL, LOCAL_BASE_URL, LOCAL_MODEL_NAME, NVIDIA_API_KEY)
 load_dotenv()
+
+# Aktuelle Chunking-Methode des laufenden /ask-Requests. Wird von ask_agent gesetzt
+# und von den Retrieval-Tools gelesen, damit der Agent gezielt in den Chunks EINER
+# Methode sucht (None -> methodenübergreifend). Über eine ContextVar, weil die Tools
+# innerhalb desselben synchronen Aufrufs laufen und keinen Parameter durchgereicht
+# bekommen.
+_request_method: contextvars.ContextVar = contextvars.ContextVar(
+    "request_method", default=None
+)
 
 
 SYSTEM_PROMPT = (
@@ -55,7 +66,7 @@ LOCAL = os.getenv("LOCAL", "true").strip().lower() in ("1", "true", "yes", "ja")
 )
 def search_lecture_docs(query: str):
     """Holt die passenden Chunks per semantischer Suche aus der Vektor-DB."""
-    results = retrieve_chunks(query, 5)
+    results = retrieve_chunks(query, 5, method=_request_method.get())
     return {
         "documents": results["documents"],
         "distances": results["distances"],
@@ -78,7 +89,7 @@ def search_lecture_docs(query: str):
 )
 def get_file_info(filename: str):
     """Holt alle Chunks einer bestimmten Datei über den Metadaten-Filter."""
-    results = retrieve_through_metadata(filename)
+    results = retrieve_through_metadata(filename, method=_request_method.get())
     return {
         "documents": results["documents"],
         "metadatas": results["metadatas"],
@@ -92,7 +103,7 @@ def _build_model():
             model=os.getenv("LOCAL_MODEL_NAME", "llama3.2:3b"),
         )
     return ChatOpenAI(
-        model="meta/llama-3.1-8b-instruct",
+        model= "openai/gpt-oss-20b", #"meta/llama-3.1-8b-instruct",
         base_url="https://integrate.api.nvidia.com/v1",
         api_key=os.environ["NVIDIA_API_KEY"],
     )
@@ -105,7 +116,20 @@ agent = create_agent(
 )
 
 
-def ask_agent(messages) -> str:
-    """Stellt dem Agenten eine Frage und gibt die Antwort als Text zurück."""
-    result = agent.invoke({'messages': messages})
+def ask_agent(messages, method: "str | ChunkingMethod | None" = None) -> str:
+    """Stellt dem Agenten eine Frage und gibt die Antwort als Text zurück.
+    Der Kontext (Chat-Verlauf) wird mit der Frage geschickt.
+
+    Args:
+        messages: Die Nutzerfrage mit Kontext.
+        method: Optionale Chunking-Methode; die Retrieval-Tools suchen dann nur in
+            den Chunks dieser Methode. None -> methodenübergreifend.
+    """
+    if method is not None:
+        method = ChunkingMethod.from_value(method)
+    token = _request_method.set(method)
+    try:
+        result = agent.invoke({"messages": messages})
+    finally:
+        _request_method.reset(token)
     return result["messages"][-1].content
