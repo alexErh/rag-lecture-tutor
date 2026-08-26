@@ -14,6 +14,9 @@ load_dotenv()
 # LOCAL=true -> lokales Ollama-Modell wird genutzt (dann Warmup/Unload sinnvoll).
 LOCAL = os.getenv("LOCAL", "true").strip().lower() in ("1", "true", "yes", "ja")
 
+# OLLAMA_WARMUP=false schaltet Vorladen/Entladen komplett ab (optional).
+WARMUP_ENABLED = os.getenv("OLLAMA_WARMUP", "true").strip().lower() in ("1", "true", "yes", "ja")
+
 
 def _ollama_keep_alive(keep_alive, timeout: int = 300) -> str:
     """Sendet eine Leer-Anfrage an Ollama, um das Modell zu laden bzw. zu entladen.
@@ -45,7 +48,7 @@ def warmup_ollama() -> None:
     So ist das Modell schon vor der ersten /ask-Anfrage bereit. Nur relevant im
     lokalen Modus (LOCAL=True); scheitert leise, falls Ollama (noch) nicht läuft.
     """
-    if not LOCAL:
+    if not LOCAL or not WARMUP_ENABLED:
         return
     try:
         print("[startup] Lade Ollama-Modell vor ...")
@@ -60,7 +63,7 @@ def unload_ollama() -> None:
 
     Gibt den RAM wieder frei (keep_alive=0). Nur im lokalen Modus; scheitert leise.
     """
-    if not LOCAL:
+    if not LOCAL or not WARMUP_ENABLED:
         return
     try:
         print("[shutdown] Entlade Ollama-Modell ...")
