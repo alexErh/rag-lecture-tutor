@@ -9,7 +9,7 @@ Baut auf:
   - pdf_to_markdown.py  -> PDF -> Markdown (docling)
   - ollama_lifecycle.py -> lokales Modell beim Start/Stop laden/entladen
 """
-
+from typing import List
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -62,8 +62,12 @@ class FileRequest(BaseModel):
     filename: str
 
 
+class Message(BaseModel):
+    role: str
+    content: str
+
 class AskRequest(BaseModel):
-    query: str
+    messages: List[Message]
 
 
 @app.post("/query")
@@ -91,7 +95,11 @@ def get_filechunks(request: FileRequest):
 # Stellt dem Backend-Agenten eine Frage und gibt die generierte Antwort zurück.
 @app.post("/ask")
 def ask(request: AskRequest):
-    answer = ask_agent(request.query)
+    messages = [
+        (msg.role, msg.content)
+        for msg in request.messages
+    ]
+    answer = ask_agent(messages)
     return {"answer": answer}
 
 
