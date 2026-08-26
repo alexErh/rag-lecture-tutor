@@ -11,7 +11,7 @@ from pathlib import Path
 import chromadb
 from chromadb.utils import embedding_functions
 
-from chunking import chunk_file
+from chunking import chunk_file, ChunkingMethod
 
 
 # ========= CHROMA =========
@@ -38,13 +38,19 @@ collection = client.get_or_create_collection(
 # ========= OPERATIONEN =========
 
 # Lese Path von Markdown ein um es Chunken zu lassen und in die DB zu speichern
-def add_document(path: str):
-    chunks = chunk_file(path)
+def add_document(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
+    """Chunkt eine Markdown-Datei mit der gewählten Methode und speichert sie.
 
-    # Vorhandene Chunks derselben Quelle entfernen -> erneuter Ingest erzeugt
-    # keine Duplikate (idempotent pro Datei).
+    Die beiden Methoden koexistieren pro Datei: ein erneuter Ingest ersetzt nur die
+    Chunks DERSELBEN Methode (idempotent pro Datei+Methode), lässt die Chunks der
+    jeweils anderen Methode aber unberührt.
+    """
+    method = ChunkingMethod.from_value(method)
+    chunks = chunk_file(path, method)
+
+    # Nur Chunks derselben Quelle UND Methode entfernen (keine Duplikate).
     try:
-        collection.delete(where={"source": path})
+        collection.delete(where={"$and": [{"source": path}, {"method": method.value}]})
     except Exception:
         pass
 
@@ -56,18 +62,27 @@ def add_document(path: str):
     return len(chunks)
 
 
+def _method_filter(method: "str | ChunkingMethod | None"):
+    """Chroma-where-Filter für die Methode (None -> kein Filter, sucht in allen)."""
+    if method is None:
+        return None
+    return {"method": ChunkingMethod.from_value(method).value}
+
+
 # Bekommt den Prompt als Query und gibt die passenden Chunks zurück
-def retrieve_chunks(query: str, n: int = 3):
-    # eventuell retreival anpassen/verbessern
+def retrieve_chunks(query: str, n: int = 3, method: "str | ChunkingMethod | None" = None):
+    # method=None -> alle Chunks; sonst nur die der gewählten Methode.
     return collection.query(
         query_texts=[query],
-        n_results=n
+        n_results=n,
+        where=_method_filter(method),
     )
 
 
-def retrieve_through_metadata(filename: str):
+def retrieve_through_metadata(filename: str, method: "str | ChunkingMethod | None" = None):
     results = collection.get(
-        include=["documents", "metadatas"]
+        include=["documents", "metadatas"],
+        where=_method_filter(method),
     )
 
     filtered = [

@@ -20,6 +20,9 @@ from pydantic import BaseModel
 # PDF -> Markdown-Konvertierung (docling)
 from pdf_to_markdown import convert_pdf, _build_converter, RAW_DIR
 
+# Chunking-Methoden (Enum, geteilt mit database.py/agent.py)
+from chunking import ChunkingMethod
+
 # DB-Operationen
 from database import (
     collection,
@@ -57,20 +60,25 @@ app = FastAPI(lifespan=lifespan)
 class QueryRequest(BaseModel):
     query: str
     n: int = 3
+    # None -> methodenübergreifend suchen; sonst nur Chunks dieser Methode.
+    method: ChunkingMethod | None = None
 
 class FileRequest(BaseModel):
     filename: str
+    method: ChunkingMethod | None = None
 
 
 class AskRequest(BaseModel):
     query: str
+    method: ChunkingMethod | None = None
 
 
 @app.post("/query")
 def query(request: QueryRequest):
     results = retrieve_chunks(
         request.query,
-        request.n
+        request.n,
+        method=request.method,
     )
     return {
         "documents": results["documents"],
@@ -81,7 +89,7 @@ def query(request: QueryRequest):
 
 @app.post("/document")
 def get_filechunks(request: FileRequest):
-    results = retrieve_through_metadata(request.filename)
+    results = retrieve_through_metadata(request.filename, method=request.method)
     return {
         "documents": results["documents"],
         "metadatas": results["metadatas"],
@@ -91,7 +99,7 @@ def get_filechunks(request: FileRequest):
 # Stellt dem Backend-Agenten eine Frage und gibt die generierte Antwort zurück.
 @app.post("/ask")
 def ask(request: AskRequest):
-    answer = ask_agent(request.query)
+    answer = ask_agent(request.query, method=request.method)
     return {"answer": answer}
 
 
@@ -103,6 +111,7 @@ def ingest(
     formulas: bool = Form(False),      # Formeln -> LaTeX (langsam, CPU)
     ocr: bool = Form(False),           # OCR (nur für gescannte PDFs nötig, langsam)
     delete_pdfs: bool = Form(True),    # verarbeitete PDFs nach dem Ingest aus raw/ löschen
+    method: ChunkingMethod = Form(ChunkingMethod.RECURSIVE),  # Chunking-Methode
 ):
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -129,11 +138,12 @@ def ingest(
     for filename, pdf_path in saved:
         try:
             md_path = convert_pdf(pdf_path, converter=converter, overwrite=True)
-            n_chunks = add_document(str(md_path))
+            n_chunks = add_document(str(md_path), method=method)
             results.append({
                 "file": filename,
                 "markdown": md_path.name,
                 "chunks": n_chunks,
+                "method": method.value,
                 "status": "ok",
             })
             processed.append(pdf_path)
