@@ -103,7 +103,7 @@ def _build_model():
             model=os.getenv("LOCAL_MODEL_NAME", "llama3.2:3b"),
         )
     return ChatOpenAI(
-        model="meta/llama-3.1-8b-instruct",
+        model= "openai/gpt-oss-20b", #"meta/llama-3.1-8b-instruct",
         base_url="https://integrate.api.nvidia.com/v1",
         api_key=os.environ["NVIDIA_API_KEY"],
     )
