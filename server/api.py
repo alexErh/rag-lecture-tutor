@@ -121,7 +121,6 @@ def ingest(
     method: ChunkingMethod = Form(ChunkingMethod.RECURSIVE),  # Chunking-Methode
 ):
     RAW_DIR.mkdir(parents=True, exist_ok=True)
-
     # docling-Converter einmal pro Request aufbauen und wiederverwenden.
     # Standard: schnell (OCR & Formel-Anreicherung aus).
     converter = _build_converter(enable_formulas=formulas, enable_ocr=ocr)
@@ -136,6 +135,7 @@ def ingest(
             results.append({"file": filename, "status": "übersprungen (keine PDF)"})
             continue
         dest = RAW_DIR / Path(filename).name
+        print(dest)
         with open(dest, "wb") as out:
             shutil.copyfileobj(f.file, out)
         saved.append((filename, dest))
@@ -146,6 +146,7 @@ def ingest(
         try:
             md_path = convert_pdf(pdf_path, converter=converter, overwrite=True)
             n_chunks = add_document(str(md_path), method=method)
+            print('N Chunks: ', n_chunks)
             results.append({
                 "file": filename,
                 "markdown": md_path.name,
@@ -155,6 +156,7 @@ def ingest(
             })
             processed.append(pdf_path)
         except Exception as exc:
+            print(f'EXCEPTION: {exc}')
             results.append({"file": filename, "status": f"Fehler: {exc}"})
 
     # --- Phase 3: verarbeitete PDFs aus dem raw-Ordner löschen (optional) ---
