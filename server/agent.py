@@ -5,11 +5,13 @@ Retrieval-Tools, die DIREKT in-process auf die DB zugreifen (kein HTTP-Umweg).
 """
 
 import contextvars
+import json
 import os
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
 from langchain.tools import tool
+from langchain_core.messages import ToolMessage
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
@@ -35,13 +37,36 @@ SYSTEM_PROMPT = (
     "Informationen fehlen oder unsicher sind, sage das ausdrücklich. Erfinde nichts "
     "und spekuliere nicht. Nutze Fachbegriffe korrekt und erkläre sie kurz, wenn nötig. Ausgaben sollen im Markdown-Format "
     "sein, sodass man es in einem Markdown-Reader anzeigen könnte. Formelblöcke also mit $$ darstellen."
-    "Gib, falls Informationen aus der Funktion search_lecture_docs entnommen werden – das "
-    "heißt, dass die Informationen aus einer Datei kommen –, immer den Dateipfad in "
-    "folgendem Format an: *Quelle*: `quelle`. Beispiel: *Quelle*: `data/raw/somefile.txt`"
+    "Gib, wann immer du Informationen aus den Funktionen search_lecture_docs oder "
+    "get_file_info verwendest (die Informationen stammen dann aus einer Datei), immer die "
+    "Quelle an – mit dem Dateipfad (Feld 'source') UND, sofern das Feld 'page' des "
+    "verwendeten Chunks vorhanden (nicht null) ist, der Seitenzahl. Format MIT Seite: "
+    "*Quelle*: `quelle`, S. `page`. Beispiel: *Quelle*: `data/processed/08_LinAbb.md`, S. 7. "
+    "Fehlt 'page' (null), nur den Pfad angeben: *Quelle*: `quelle`. Nutzt du mehrere Chunks "
+    "aus verschiedenen Quellen oder von verschiedenen Seiten, nenne alle jeweiligen Quellen."
 )
 
 # LOCAL=true -> lokales Ollama-Modell; LOCAL=false -> Nvidia NIM API.
 LOCAL = os.getenv("LOCAL", "true").strip().lower() in ("1", "true", "yes", "ja")
+
+
+def _format_hits(documents, metadatas, distances=None):
+    """Bereitet Chunks flach auf: pro Treffer content + source + page (+ distance).
+
+    Macht Quelle und Seite für das Modell explizit sichtbar, damit es korrekt
+    zitieren kann, statt sie aus verschachtelten Metadaten ziehen zu müssen.
+    """
+    hits = []
+    for i, (doc, meta) in enumerate(zip(documents, metadatas)):
+        hit = {
+            "content": doc,
+            "source": meta.get("source"),
+            "page": meta.get("page"),  # None, falls (noch) nicht getaggt
+        }
+        if distances is not None:
+            hit["distance"] = distances[i]
+        hits.append(hit)
+    return hits
 
 
 @tool(
@@ -67,11 +92,11 @@ LOCAL = os.getenv("LOCAL", "true").strip().lower() in ("1", "true", "yes", "ja")
 def search_lecture_docs(query: str):
     """Holt die passenden Chunks per semantischer Suche aus der Vektor-DB."""
     results = retrieve_chunks(query, 5, method=_request_method.get())
-    return {
-        "documents": results["documents"],
-        "distances": results["distances"],
-        "metadatas": results["metadatas"],
-    }
+    # collection.query liefert je Abfrage verschachtelte Listen -> [0].
+    documents = results["documents"][0] if results["documents"] else []
+    metadatas = results["metadatas"][0] if results["metadatas"] else []
+    distances = results["distances"][0] if results["distances"] else []
+    return {"results": _format_hits(documents, metadatas, distances)}
 
 
 @tool(
@@ -90,10 +115,7 @@ def search_lecture_docs(query: str):
 def get_file_info(filename: str):
     """Holt alle Chunks einer bestimmten Datei über den Metadaten-Filter."""
     results = retrieve_through_metadata(filename, method=_request_method.get())
-    return {
-        "documents": results["documents"],
-        "metadatas": results["metadatas"],
-    }
+    return {"results": _format_hits(results["documents"], results["metadatas"])}
 
 
 def _build_model():
@@ -116,6 +138,53 @@ agent = create_agent(
 )
 
 
+def _has_source_citation(answer: str) -> bool:
+    """Grobe Prüfung, ob der Agent die Quelle bereits selbst angegeben hat."""
+    return "quelle" in answer.lower()
+
+
+def _collect_retrieved_sources(messages) -> "dict[str, set]":
+    """Sammelt aus den Tool-Ergebnissen: Dateiname -> Menge der Seitenzahlen.
+
+    Reihenfolge des ersten Auftretens bleibt erhalten (dict ist geordnet).
+    """
+    sources: dict[str, set] = {}
+    for msg in messages:
+        if not isinstance(msg, ToolMessage):
+            continue
+        payload = msg.content
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (ValueError, TypeError):
+                continue
+        if not isinstance(payload, dict):
+            continue
+        for hit in payload.get("results", []):
+            src = hit.get("source")
+            if not src:
+                continue
+            name = os.path.basename(str(src).replace("\\", "/"))
+            pages = sources.setdefault(name, set())
+            if hit.get("page") is not None:
+                pages.add(hit["page"])
+    return sources
+
+
+def _format_sources_block(sources: "dict[str, set]") -> str:
+    """Baut aus (Dateiname -> Seiten) einen Markdown-Quellenblock (leer, wenn keine)."""
+    if not sources:
+        return ""
+    lines = ["**Quellen:**"]
+    for name, pages in sources.items():
+        if pages:
+            page_str = ", ".join(str(p) for p in sorted(pages))
+            lines.append(f"- `{name}`, S. {page_str}")
+        else:
+            lines.append(f"- `{name}`")
+    return "\n".join(lines)
+
+
 def ask_agent(messages, method: "str | ChunkingMethod | None" = None) -> str:
     """Stellt dem Agenten eine Frage und gibt die Antwort als Text zurück.
     Der Kontext (Chat-Verlauf) wird mit der Frage geschickt.
@@ -132,4 +201,15 @@ def ask_agent(messages, method: "str | ChunkingMethod | None" = None) -> str:
         result = agent.invoke({"messages": messages})
     finally:
         _request_method.reset(token)
-    return result["messages"][-1].content
+
+    result_messages = result["messages"]
+    answer = result_messages[-1].content
+
+    # Fallback: Hat der Agent die Quelle NICHT selbst genannt, hängen wir sie
+    # deterministisch aus den tatsächlich abgerufenen Chunks an (Dateiname + Seiten).
+    if not _has_source_citation(answer):
+        block = _format_sources_block(_collect_retrieved_sources(result_messages))
+        if block:
+            answer = f"{answer}\n\n{block}"
+
+    return answer
