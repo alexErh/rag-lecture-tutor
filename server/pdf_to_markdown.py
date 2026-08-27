@@ -16,17 +16,9 @@ Nutzung (aus dem server/-Ordner):
     python pdf_to_markdown.py            # alle PDFs aus data/raw konvertieren
 """
 
-import os
+import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor docling-Import
 import re
 from pathlib import Path
-
-# Vollständig lokaler Betrieb: die docling-Modelle (Layout, CodeFormulaV2) sind
-# nach dem ersten Lauf im HuggingFace-Cache. Offline-Modus verhindert die Hub-
-# Anfragen beim ersten Ingest ("unauthenticated requests to the HF Hub"-Warnung)
-# und garantiert, dass kein Netz benötigt wird. setdefault -> per Umgebungsvariable
-# überschreibbar, falls doch mal ein neues Modell geladen werden soll (HF_HUB_OFFLINE=0).
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
 
 # Pfade relativ zu dieser Datei (server/), damit der Aufruf vom cwd unabhängig ist.
 BASE_DIR = Path(__file__).resolve().parent

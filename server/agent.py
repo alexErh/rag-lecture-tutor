@@ -4,6 +4,8 @@ Der Agent wird beim Import (und damit beim API-Start) aufgebaut. Er nutzt
 Retrieval-Tools, die DIREKT in-process auf die DB zugreifen (kein HTTP-Umweg).
 """
 
+import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor HF-nutzenden Imports
+
 import contextvars
 import json
 import os
