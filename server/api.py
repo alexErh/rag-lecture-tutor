@@ -9,6 +9,8 @@ Baut auf:
   - pdf_to_markdown.py  -> PDF -> Markdown (docling)
   - ollama_lifecycle.py -> lokales Modell beim Start/Stop laden/entladen
 """
+import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor HF-nutzenden Imports
+
 from typing import List
 import shutil
 from contextlib import asynccontextmanager
