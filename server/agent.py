@@ -9,6 +9,7 @@ import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor HF-nutzend
 import contextvars
 import json
 import os
+import re
 
 from dotenv import load_dotenv
 from langchain.agents import create_agent
@@ -34,18 +35,36 @@ _request_method: contextvars.ContextVar = contextvars.ContextVar(
 
 
 SYSTEM_PROMPT = (
-    "Du bist ein Tutor für Vorlesungsinhalte. Beantworte Fragen nur auf Basis des "
-    "bereitgestellten Kontexts. Erkläre klar, korrekt und verständlich. Wenn "
-    "Informationen fehlen oder unsicher sind, sage das ausdrücklich. Erfinde nichts "
-    "und spekuliere nicht. Nutze Fachbegriffe korrekt und erkläre sie kurz, wenn nötig. Ausgaben sollen im Markdown-Format "
-    "sein, sodass man es in einem Markdown-Reader anzeigen könnte. Formelblöcke also mit $$ darstellen."
-    "Gib, wann immer du Informationen aus den Funktionen search_lecture_docs oder "
-    "get_file_info verwendest (die Informationen stammen dann aus einer Datei), immer die "
-    "Quelle an – mit dem Dateipfad (Feld 'source') UND, sofern das Feld 'page' des "
-    "verwendeten Chunks vorhanden (nicht null) ist, der Seitenzahl. Format MIT Seite: "
-    "*Quelle*: `quelle`, S. `page`. Beispiel: *Quelle*: `data/processed/08_LinAbb.md`, S. 7. "
-    "Fehlt 'page' (null), nur den Pfad angeben: *Quelle*: `quelle`. Nutzt du mehrere Chunks "
-    "aus verschiedenen Quellen oder von verschiedenen Seiten, nenne alle jeweiligen Quellen."
+    "# Rolle\n"
+    "Du bist ein Tutor für Vorlesungsinhalte und hilfst Studierenden, die "
+    "bereitgestellten Vorlesungsdokumente zu verstehen.\n\n"
+
+    "# Vorgehen\n"
+    "- Für inhaltliche Fragen rufe IMMER zuerst ein Retrieval-Tool auf: "
+    "search_lecture_docs für konzeptionelle Fragen, get_file_info, wenn eine konkrete "
+    "Datei genannt wird. Antworte nicht aus eigenem Wissen, ohne vorher zu suchen.\n"
+    "- Beschreibe deine Tool-Nutzung NICHT und gib niemals Tool-Aufrufe als Text aus - "
+    "liefere direkt die fertige Antwort.\n\n"
+
+    "# Grounding\n"
+    "- Beantworte ausschließlich auf Basis der zurückgelieferten Chunks. Erfinde nichts "
+    "und spekuliere nicht.\n"
+    "- Enthalten die Chunks die Antwort nicht (oder nur teilweise), sage das ausdrücklich, "
+    "statt aus Allgemeinwissen zu ergänzen.\n\n"
+
+    "# Quellenangabe\n"
+    "Wann immer du Informationen aus search_lecture_docs oder get_file_info nutzt, nenne "
+    "am Ende die Quelle(n). Verwende NUR den Dateinamen aus dem Feld 'source' (ohne "
+    "Verzeichnispfad) und, falls das Feld 'page' vorhanden (nicht null) ist, die Seite:\n"
+    "- mit Seite:  *Quelle*: `08_LinAbb.md`, S. 7\n"
+    "- ohne Seite: *Quelle*: `08_LinAbb.md`\n"
+    "Nutzt du mehrere Dateien oder Seiten, liste alle als eigene Quellenzeilen.\n\n"
+
+    "# Format & Sprache\n"
+    "- Antworte in der Sprache der Frage.\n"
+    "- Nutze Markdown (Überschriften, Listen, wo sinnvoll) und erkläre didaktisch; "
+    "führe Fachbegriffe kurz ein, wenn nötig.\n"
+    "- Formeln als LaTeX: Blockformeln mit $$ ... $$, Inline-Formeln mit $ ... $."
 )
 
 # LOCAL=true -> lokales Ollama-Modell; LOCAL=false -> Nvidia NIM API.
@@ -93,7 +112,9 @@ def _format_hits(documents, metadatas, distances=None):
 )
 def search_lecture_docs(query: str):
     """Holt die passenden Chunks per semantischer Suche aus der Vektor-DB."""
-    results = retrieve_chunks(query, 5, method=_request_method.get())
+    method = _request_method.get()
+    print("Chunking Method:\t", method)
+    results = retrieve_chunks(query, 5, method=method)
     # collection.query liefert je Abfrage verschachtelte Listen -> [0].
     documents = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
@@ -187,6 +208,24 @@ def _format_sources_block(sources: "dict[str, set]") -> str:
     return "\n".join(lines)
 
 
+# LaTeX-Delimiter, die manche Markdown-Renderer NICHT verstehen, auf die verbreiteten
+# $$/$-Delimiter vereinheitlichen. Nur ausbalancierte Paare werden ersetzt.
+_MATH_BLOCK_RE = re.compile(r"\\\[(.+?)\\\]", re.DOTALL)   # \[ ... \] -> $$ ... $$
+_MATH_INLINE_RE = re.compile(r"\\\((.+?)\\\)", re.DOTALL)  # \( ... \) -> $ ... $
+
+
+def _normalize_math_delimiters(text: str) -> str:
+    """Vereinheitlicht LaTeX-Formel-Delimiter, damit die GANZE Antwort (inkl. Formeln)
+    von einem Markdown-Renderer (MathJax/KaTeX) dargestellt werden kann.
+
+    Das Modell nutzt mal $$/$ und mal \\[..\\]/\\(..\\); letztere werden hier auf
+    $$..$$ bzw. $..$ gebracht. Bereits korrekte $$/$-Formeln bleiben unberührt.
+    """
+    text = _MATH_BLOCK_RE.sub(lambda m: f"$$\n{m.group(1).strip()}\n$$", text)
+    text = _MATH_INLINE_RE.sub(lambda m: f"${m.group(1).strip()}$", text)
+    return text
+
+
 def ask_agent(messages, method: "str | ChunkingMethod | None" = None) -> str:
     """Stellt dem Agenten eine Frage und gibt die Antwort als Text zurück.
     Der Kontext (Chat-Verlauf) wird mit der Frage geschickt.
@@ -214,4 +253,5 @@ def ask_agent(messages, method: "str | ChunkingMethod | None" = None) -> str:
         if block:
             answer = f"{answer}\n\n{block}"
 
-    return answer
+    # Formel-Delimiter vereinheitlichen, damit die ganze Antwort renderbar ist.
+    return _normalize_math_delimiters(answer)

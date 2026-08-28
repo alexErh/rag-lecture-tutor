@@ -1,22 +1,36 @@
 """Chunking-Logik: Markdown-Text in (formelschonende) Chunks zerlegen.
 
-Zwei Chunking-Methoden, unterscheidbar über das Enum ChunkingMethod:
+Chunking-Methoden, unterscheidbar über das Enum ChunkingMethod:
 
 * RECURSIVE  – zeichenbasiertes Splitten mit RecursiveCharacterTextSplitter
                (kleine, gleichmäßige Chunks; ignoriert die Dokumentstruktur).
 * MARKDOWN   – strukturbasiertes Splitten mit MarkdownHeaderTextSplitter: teilt
-               zuerst an den Überschriften (#/##/###), sodass ein Chunk nie über
-               Abschnittsgrenzen läuft, und hängt die Überschriften-Hierarchie als
-               Metadaten (h1/h2/h3) an. Große Abschnitte werden anschließend auf
-               eine embeddbare Größe begrenzt.
+               zuerst an den Überschriften (#/##/###) und hängt die Hierarchie als
+               Metadaten (h1/h2/h3) an. Große Abschnitte werden begrenzt.
+* LATE       – Late Chunking mit Chonkie: der (lange) Text wird ZUERST embeddet
+               (Token-Level), dann werden Chunk-Grenzen gelegt und die Token-Vektoren
+               PRO Chunk gemittelt. Jeder Chunk-Vektor trägt so Dokumentkontext.
+               Anders als die anderen Methoden liefert LATE bereits die Embeddings
+               mit (ChunkRecord.embedding); diese werden in einer eigenen Collection
+               gespeichert (siehe database.py), weil ihre Dimension vom Standard-
+               Embedding-Modell abweicht.
 
-Beide Methoden schützen LaTeX-Formeln vor dem Zerschneiden (siehe Formel-Schutz).
-Jeder Chunk wird mit metadata['method'] markiert, damit die DB gezielt nach den
-Chunks einer bestimmten Methode suchen kann.
+Die (text-basierten) Methoden schützen LaTeX-Formeln vor dem Zerschneiden (siehe
+Formel-Schutz). Jeder Chunk wird mit metadata['method'] markiert, damit die DB
+gezielt nach den Chunks einer bestimmten Methode suchen kann.
+
+Perspektive: die übrigen Methoden werden schrittweise ebenfalls auf Chonkie
+umgestellt (TokenChunker = fixed-size, SemanticChunker, RecursiveChunker/Struktur);
+das gemeinsame Rückgabeformat ChunkRecord ist dafür schon vorbereitet.
 """
 
+import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor HF-nutzenden Imports
+
+import os
 import re
+from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 
 from langchain_text_splitters import (
     MarkdownHeaderTextSplitter,
@@ -33,6 +47,7 @@ class ChunkingMethod(str, Enum):
 
     RECURSIVE = "recursive"
     MARKDOWN = "markdown"
+    LATE = "late"  # Late Chunking (Chonkie) – liefert Embeddings mit
 
     @classmethod
     def from_value(cls, value: "str | ChunkingMethod | None") -> "ChunkingMethod":
@@ -46,6 +61,21 @@ class ChunkingMethod(str, Enum):
             raise ValueError(
                 f"Unbekannte Chunking-Methode: {value!r}. Erlaubt: {valid}"
             ) from exc
+
+
+# ========= GEMEINSAMES CHUNK-FORMAT =========
+
+@dataclass
+class ChunkRecord:
+    """Ein Chunk unabhängig von der Methode.
+
+    embedding ist nur bei Methoden gesetzt, die selbst embedden (LATE); bei den
+    text-basierten Methoden bleibt es None und die DB embeddet den Text selbst.
+    """
+
+    text: str
+    metadata: dict
+    embedding: "list[float] | None" = None
 
 
 # ========= CHUNKER =========
@@ -140,7 +170,93 @@ def _split_by_page(text: str) -> "list[tuple[int | None, str]]":
     return segments or [(None, text)]
 
 
-# ========= SPLITTER PRO METHODE =========
+# ========= LATE CHUNKING (Chonkie) =========
+# Late Chunking embeddet den ganzen Text zuerst und mittelt die Token-Vektoren pro
+# Chunk -> jeder Chunk-Vektor kennt den Dokumentkontext. Das Embedding-Modell muss
+# lang genug sein, damit der Kontext etwas bringt; das Standard-128-Token-Modell ist
+# dafür zu kurz. Modell (und Chunk-Größe) sind per .env konfigurierbar.
+#
+# WICHTIG (deutschsprachiges Material): ein MEHRSPRACHIGES Long-Context-Modell wählen,
+# z. B. LATE_EMBEDDING_MODEL=intfloat/multilingual-e5-base oder jinaai/jina-embeddings-v3.
+LATE_EMBEDDING_MODEL = os.getenv("LATE_EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
+LATE_CHUNK_SIZE = int(os.getenv("LATE_CHUNK_SIZE", "512"))  # Tokens pro Chunk
+
+_late_embeddings = None  # chonkie SentenceTransformerEmbeddings (lazy)
+_late_chunker = None      # chonkie LateChunker (lazy)
+
+
+def _get_late():
+    """Lädt (einmalig) das Late-Embedding-Modell und den LateChunker.
+
+    Import und Modell-Load bewusst lazy: nur wenn LATE tatsächlich genutzt wird.
+    """
+    global _late_embeddings, _late_chunker
+    if _late_chunker is None:
+        from chonkie import LateChunker
+        from chonkie.embeddings.sentence_transformer import SentenceTransformerEmbeddings
+
+        # Ein Modell-Objekt für Chunking UND Query-Embedding (gleicher Vektorraum).
+        _late_embeddings = SentenceTransformerEmbeddings(model=LATE_EMBEDDING_MODEL)
+        _late_chunker = LateChunker(
+            embedding_model=_late_embeddings,
+            chunk_size=LATE_CHUNK_SIZE,
+        )
+    return _late_embeddings, _late_chunker
+
+
+def embed_query_late(query: str) -> "list[float]":
+    """Embeddet eine Query mit dem Late-Modell (für die Suche in den Late-Chunks)."""
+    embeddings, _ = _get_late()
+    vector = embeddings.embed(query)
+    return vector.tolist() if hasattr(vector, "tolist") else list(vector)
+
+
+def _strip_page_markers(text: str):
+    """Entfernt die <!-- page: N -->-Marker und merkt sich, ab welchem (bereinigten)
+    Zeichen-Offset welche Seite beginnt. Rückgabe: (clean_text, [(offset, seite), ...])."""
+    boundaries: list[tuple[int, int]] = []
+    parts: list[str] = []
+    clean_len = 0
+    pos = 0
+    for match in _PAGE_MARKER_RE.finditer(text):
+        segment = text[pos : match.start()]
+        parts.append(segment)
+        clean_len += len(segment)
+        boundaries.append((clean_len, int(match.group(1))))  # ab hier: neue Seite
+        pos = match.end()
+    parts.append(text[pos:])
+    return "".join(parts), boundaries
+
+
+def _page_at(offset: int, boundaries: "list[tuple[int, int]]") -> "int | None":
+    """Seitenzahl für einen Zeichen-Offset im bereinigten Text (letzte Grenze <= offset)."""
+    page = None
+    for start, page_no in boundaries:
+        if start <= offset:
+            page = page_no
+        else:
+            break
+    return page
+
+
+def _late_chunks(text: str, path: str) -> "list[ChunkRecord]":
+    """Late Chunking über das ganze Dokument; Seite via Zeichen-Offset zugeordnet."""
+    _, chunker = _get_late()
+    clean_text, boundaries = _strip_page_markers(text)
+
+    records: list[ChunkRecord] = []
+    for chunk in chunker.chunk(clean_text):
+        metadata = {"source": path, "method": ChunkingMethod.LATE.value}
+        page = _page_at(chunk.start_index, boundaries)
+        if page is not None:
+            metadata["page"] = page
+        vector = chunk.embedding
+        embedding = vector.tolist() if hasattr(vector, "tolist") else list(vector)
+        records.append(ChunkRecord(text=chunk.text, metadata=metadata, embedding=embedding))
+    return records
+
+
+# ========= SPLITTER PRO METHODE (text-basiert) =========
 
 def _recursive_chunks(masked_text: str, path: str) -> list[Document]:
     document = Document(page_content=masked_text, metadata={"source": path})
@@ -154,25 +270,32 @@ def _markdown_chunks(masked_text: str, path: str) -> list[Document]:
     return _md_size_splitter.split_documents(sections)
 
 
-def chunk_file(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
-    """Liest eine Markdown-Datei ein und zerlegt sie formelschonend in Chunks.
+def chunk_file(
+    path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE
+) -> "list[ChunkRecord]":
+    """Liest eine Markdown-Datei ein und zerlegt sie in Chunks.
 
     Args:
         path: Pfad zur Markdown-Datei.
         method: Chunking-Methode (ChunkingMethod oder deren String-Wert).
 
     Returns:
-        Liste von Document-Chunks; jeder trägt metadata['source'] und
-        metadata['method'].
+        Liste von ChunkRecord; jeder trägt metadata['source'] und metadata['method']
+        (sowie 'page', wenn Seiten-Marker vorhanden). Bei LATE ist zusätzlich
+        ChunkRecord.embedding gesetzt.
     """
     method = ChunkingMethod.from_value(method)
 
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
 
-    all_chunks: list[Document] = []
-    # Pro Seite getrennt chunken -> jeder Chunk trägt seine Seitenzahl und läuft
-    # nie über eine Seitengrenze.
+    # LATE embeddet selbst und arbeitet auf dem ganzen Dokument (Kontext!).
+    if method is ChunkingMethod.LATE:
+        return _late_chunks(text, path)
+
+    # Text-basierte Methoden: pro Seite getrennt chunken -> jeder Chunk trägt seine
+    # Seitenzahl und läuft nie über eine Seitengrenze.
+    records: list[ChunkRecord] = []
     for page_no, segment in _split_by_page(text):
         # Formeln vor dem Splitten schützen ...
         masked_text, formulas = _mask_math(segment)
@@ -184,12 +307,57 @@ def chunk_file(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECURS
 
         # ... Formeln je Chunk wiederherstellen und Metadaten vereinheitlichen.
         for chunk in chunks:
-            chunk.page_content = _unmask_math(chunk.page_content, formulas)
-            chunk.metadata["source"] = path
-            chunk.metadata["method"] = method.value
+            content = _unmask_math(chunk.page_content, formulas)
+            metadata = dict(chunk.metadata)  # enthält bei MARKDOWN h1/h2/h3
+            metadata["source"] = path
+            metadata["method"] = method.value
             if page_no is not None:
-                chunk.metadata["page"] = page_no
+                metadata["page"] = page_no
+            records.append(ChunkRecord(text=content, metadata=metadata))
 
-        all_chunks.extend(chunks)
+    return records
 
-    return all_chunks
+
+# ========= CLI: alle Markdown-Dateien aus data/processed chunken =========
+
+# data/processed liegt neben dieser Datei (server/data/processed).
+PROCESSED_DIR = Path(__file__).resolve().parent / "data" / "processed"
+
+
+def chunk_all(method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
+    """Chunkt ALLE .md-Dateien aus data/processed mit der gewählten Methode.
+
+    Speichert NICHT in die DB – gibt nur eine Übersicht aus (Chunk-Anzahl, Seiten-
+    spanne je Datei) und liefert eine Liste (dateiname, anzahl_chunks) zurück.
+    """
+    method = ChunkingMethod.from_value(method)
+    md_files = sorted(PROCESSED_DIR.glob("*.md"))
+    if not md_files:
+        print(f"Keine Markdown-Dateien in {PROCESSED_DIR}")
+        return []
+
+    print(f"Chunking-Methode: {method.value} | {len(md_files)} Datei(en)\n")
+    results: list[tuple[str, int]] = []
+    for md in md_files:
+        try:
+            records = chunk_file(str(md), method)
+            pages = sorted(
+                {r.metadata.get("page") for r in records if r.metadata.get("page") is not None}
+            )
+            span = f"S. {pages[0]}-{pages[-1]}" if pages else "keine Seiten"
+            print(f"  {md.name}: {len(records)} Chunks ({span})")
+            results.append((md.name, len(records)))
+        except Exception as exc:
+            print(f"  [FEHLER] {md.name}: {exc}")
+
+    total = sum(n for _, n in results)
+    print(f"\nFertig: {len(results)} Datei(en), {total} Chunks insgesamt.")
+    return results
+
+
+if __name__ == "__main__":
+    import sys
+
+    # Optionales Methoden-Argument, z. B.:  python chunking.py markdown
+    chosen = sys.argv[1] if len(sys.argv) > 1 else ChunkingMethod.MARKDOWN
+    chunk_all(chosen)
