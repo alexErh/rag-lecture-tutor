@@ -53,8 +53,8 @@ def add_document(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECU
     # Nur Chunks derselben Quelle UND Methode entfernen (keine Duplikate).
     try:
         collection.delete(where={"$and": [{"source": path}, {"method": method.value}]})
-    except Exception:
-        pass
+    except Exception as e:
+        print(f'EXCEPTION add_document: {e}')
 
     collection.add(
         ids=[str(uuid.uuid4()) for _ in chunks],

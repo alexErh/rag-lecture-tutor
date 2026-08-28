@@ -23,6 +23,7 @@ from langchain_text_splitters import (
     RecursiveCharacterTextSplitter,
 )
 from langchain_core.documents import Document
+from chonkie import SemanticChunker
 
 
 # ========= CHUNKING-METHODEN =========
@@ -33,6 +34,7 @@ class ChunkingMethod(str, Enum):
 
     RECURSIVE = "recursive"
     MARKDOWN = "markdown"
+    SEMANTIC = "semantic"
 
     @classmethod
     def from_value(cls, value: "str | ChunkingMethod | None") -> "ChunkingMethod":
@@ -72,6 +74,13 @@ _md_size_splitter = RecursiveCharacterTextSplitter(
     chunk_size=400,
     chunk_overlap=40,
     separators=["\n\n", "\n", ". ", " "],
+)
+
+_semantic_splitter = SemanticChunker(
+    embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    threshold=0.7,
+    chunk_size=4096,
+    skip_window=1
 )
 
 
@@ -153,6 +162,20 @@ def _markdown_chunks(masked_text: str, path: str) -> list[Document]:
     # 2) Zu große Abschnitte auf embeddbare Größe begrenzen (Header-Metadaten bleiben).
     return _md_size_splitter.split_documents(sections)
 
+# Chonkie Semantic Chunking
+def _semantic_chunks(masked_text: str, path: str) -> list[Document]:
+    chunks = _semantic_splitter.chunk(masked_text)
+    # Wandelt einen Chonkie Chunk in ein Dokument um. Wichtig für die Weiterverarbeitung, da sie auf Documents basiert.
+    return [
+        Document(
+            page_content=chunk.text,
+            metadata={
+                "source": path,
+            },
+        )
+        for chunk in chunks
+    ]
+
 
 def chunk_file(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
     """Liest eine Markdown-Datei ein und zerlegt sie formelschonend in Chunks.
@@ -177,10 +200,15 @@ def chunk_file(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECURS
         # Formeln vor dem Splitten schützen ...
         masked_text, formulas = _mask_math(segment)
 
-        if method is ChunkingMethod.MARKDOWN:
-            chunks = _markdown_chunks(masked_text, path)
-        else:
-            chunks = _recursive_chunks(masked_text, path)
+        match method:
+            case ChunkingMethod.MARKDOWN:
+                chunks = _markdown_chunks(masked_text, path)
+            case ChunkingMethod.RECURSIVE:
+                chunks = _recursive_chunks(masked_text, path)
+            case ChunkingMethod.SEMANTIC:
+                chunks = _semantic_chunks(masked_text, path)
+
+
 
         # ... Formeln je Chunk wiederherstellen und Metadaten vereinheitlichen.
         for chunk in chunks:

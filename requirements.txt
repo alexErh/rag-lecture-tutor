@@ -8,3 +8,4 @@ fastapi
 docling
 sentence-transformers
 python-multipart
+chonkie
