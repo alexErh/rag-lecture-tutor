@@ -5,6 +5,8 @@ Funktionen zum Hinzufügen und Abrufen von Chunks. Das Chunking selbst liegt in
 chunking.py.
 """
 
+import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor dem Embedding-Modell
+
 import uuid
 from pathlib import Path
 

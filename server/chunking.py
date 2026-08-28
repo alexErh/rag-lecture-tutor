@@ -124,6 +124,31 @@ def _unmask_math(text: str, formulas: list[str]) -> str:
     return text
 
 
+# ========= SEITEN-ZUORDNUNG =========
+# pdf_to_markdown.py stellt jeder Seite einen Marker <!-- page: N --> voran. Wir
+# zerlegen den Text an diesen Markern in (Seitenzahl, Segment)-Paare, damit jeder
+# Chunk seine Seite kennt (und kein Chunk über eine Seitengrenze läuft). Das Marker-
+# Format muss mit pdf_to_markdown.PAGE_MARKER übereinstimmen.
+_PAGE_MARKER_RE = re.compile(r"<!--\s*page:\s*(\d+)\s*-->")
+
+
+def _split_by_page(text: str) -> "list[tuple[int | None, str]]":
+    """Zerlegt Markdown an den Seiten-Markern. Ohne Marker: ein Segment mit page=None."""
+    segments: list[tuple[int | None, str]] = []
+    current_page: int | None = None
+    pos = 0
+    for match in _PAGE_MARKER_RE.finditer(text):
+        segment = text[pos : match.start()]
+        if segment.strip():
+            segments.append((current_page, segment))
+        current_page = int(match.group(1))
+        pos = match.end()
+    tail = text[pos:]
+    if tail.strip():
+        segments.append((current_page, tail))
+    return segments or [(None, text)]
+
+
 # ========= SPLITTER PRO METHODE =========
 
 def _recursive_chunks(masked_text: str, path: str) -> list[Document]:
@@ -168,23 +193,31 @@ def chunk_file(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECURS
     with open(path, "r", encoding="utf-8") as f:
         text = f.read()
 
-    # Formeln vor dem Splitten schützen ...
-    masked_text, formulas = _mask_math(text)
+    all_chunks: list[Document] = []
+    # Pro Seite getrennt chunken -> jeder Chunk trägt seine Seitenzahl und läuft
+    # nie über eine Seitengrenze.
+    for page_no, segment in _split_by_page(text):
+        # Formeln vor dem Splitten schützen ...
+        masked_text, formulas = _mask_math(segment)
 
-    match method:
-        case ChunkingMethod.MARKDOWN:
-            chunks = _markdown_chunks(masked_text, path)
-        case ChunkingMethod.RECURSIVE:
-            chunks = _recursive_chunks(masked_text, path)
-        case ChunkingMethod.SEMANTIC:
-            chunks = _semantic_chunks(masked_text, path)
+        match method:
+            case ChunkingMethod.MARKDOWN:
+                chunks = _markdown_chunks(masked_text, path)
+            case ChunkingMethod.RECURSIVE:
+                chunks = _recursive_chunks(masked_text, path)
+            case ChunkingMethod.SEMANTIC:
+                chunks = _semantic_chunks(masked_text, path)
 
 
 
-    # ... Formeln je Chunk wiederherstellen und Metadaten vereinheitlichen.
-    for chunk in chunks:
-        chunk.page_content = _unmask_math(chunk.page_content, formulas)
-        chunk.metadata["source"] = path
-        chunk.metadata["method"] = method.value
+        # ... Formeln je Chunk wiederherstellen und Metadaten vereinheitlichen.
+        for chunk in chunks:
+            chunk.page_content = _unmask_math(chunk.page_content, formulas)
+            chunk.metadata["source"] = path
+            chunk.metadata["method"] = method.value
+            if page_no is not None:
+                chunk.metadata["page"] = page_no
 
-    return chunks
+        all_chunks.extend(chunks)
+
+    return all_chunks

@@ -16,17 +16,9 @@ Nutzung (aus dem server/-Ordner):
     python pdf_to_markdown.py            # alle PDFs aus data/raw konvertieren
 """
 
-import os
+import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor docling-Import
 import re
 from pathlib import Path
-
-# Vollständig lokaler Betrieb: die docling-Modelle (Layout, CodeFormulaV2) sind
-# nach dem ersten Lauf im HuggingFace-Cache. Offline-Modus verhindert die Hub-
-# Anfragen beim ersten Ingest ("unauthenticated requests to the HF Hub"-Warnung)
-# und garantiert, dass kein Netz benötigt wird. setdefault -> per Umgebungsvariable
-# überschreibbar, falls doch mal ein neues Modell geladen werden soll (HF_HUB_OFFLINE=0).
-os.environ.setdefault("HF_HUB_OFFLINE", "0")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "0")
 
 # Pfade relativ zu dieser Datei (server/), damit der Aufruf vom cwd unabhängig ist.
 BASE_DIR = Path(__file__).resolve().parent
@@ -182,6 +174,28 @@ def _build_converter(
     )
 
 
+# Seiten-Marker: docling verwirft im flachen Markdown die Seiteninformation. Wir
+# bauen das Markdown deshalb SEITENWEISE auf und stellen jeder Seite einen HTML-
+# Kommentar mit der echten Seitenzahl voran. chunking.py liest diese Marker wieder
+# aus, um jedem Chunk seine Seite zuzuordnen – das Format muss dort übereinstimmen.
+PAGE_MARKER = "<!-- page: {} -->"
+
+
+def _export_markdown_with_pages(document) -> str:
+    """Exportiert ein DoclingDocument nach Markdown, jede Seite mit Seiten-Marker.
+
+    Fällt auf den normalen Export zurück, falls das Dokument keine Seiten meldet.
+    """
+    pages = sorted(document.pages)
+    if not pages:
+        return document.export_to_markdown()
+    parts = [
+        f"{PAGE_MARKER.format(page_no)}\n\n{document.export_to_markdown(page_no=page_no)}"
+        for page_no in pages
+    ]
+    return "\n\n".join(parts)
+
+
 def convert_pdf(
     pdf_path: str,
     converter=None,
@@ -217,7 +231,7 @@ def convert_pdf(
 
     converter = converter or _build_converter(enable_formulas=enable_formulas)
     result = converter.convert(str(pdf_path))
-    markdown = result.document.export_to_markdown()
+    markdown = _export_markdown_with_pages(result.document)  # inkl. Seiten-Marker
     if clean_formulas:
         markdown = _clean_formula_markdown(markdown)  # Formel-Artefakte glätten (optional)
     out_path.write_text(markdown, encoding="utf-8")
