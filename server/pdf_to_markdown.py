@@ -25,8 +25,8 @@ from pathlib import Path
 # Anfragen beim ersten Ingest ("unauthenticated requests to the HF Hub"-Warnung)
 # und garantiert, dass kein Netz benötigt wird. setdefault -> per Umgebungsvariable
 # überschreibbar, falls doch mal ein neues Modell geladen werden soll (HF_HUB_OFFLINE=0).
-os.environ.setdefault("HF_HUB_OFFLINE", "1")
-os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+os.environ.setdefault("HF_HUB_OFFLINE", "0")
+os.environ.setdefault("TRANSFORMERS_OFFLINE", "0")
 
 # Pfade relativ zu dieser Datei (server/), damit der Aufruf vom cwd unabhängig ist.
 BASE_DIR = Path(__file__).resolve().parent

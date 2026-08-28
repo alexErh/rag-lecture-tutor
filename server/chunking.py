@@ -137,8 +137,10 @@ def _markdown_chunks(masked_text: str, path: str) -> list[Document]:
     # 2) Zu große Abschnitte auf embeddbare Größe begrenzen (Header-Metadaten bleiben).
     return _md_size_splitter.split_documents(sections)
 
+# Chonkie Semantic Chunking
 def _semantic_chunks(masked_text: str, path: str) -> list[Document]:
     chunks = _semantic_splitter.chunk(masked_text)
+    # Wandelt einen Chonkie Chunk in ein Dokument um. Wichtig für die Weiterverarbeitung, da sie auf Documents basiert.
     return [
         Document(
             page_content=chunk.text,
