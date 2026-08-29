@@ -330,16 +330,22 @@ def chunk_file(
                 chunks = _recursive_chunks(masked_text, path)
             case ChunkingMethod.SEMANTIC:
                 chunks = _semantic_chunks(masked_text, path)
-
         # ... Formeln je Chunk wiederherstellen und Metadaten vereinheitlichen.
-        for chunk in chunks:
-            content = _unmask_math(chunk.page_content, formulas)
-            metadata = dict(chunk.metadata)  # enthält bei MARKDOWN h1/h2/h3
-            metadata["source"] = path
-            metadata["method"] = method.value
-            if page_no is not None:
-                metadata["page"] = page_no
-            records.append(ChunkRecord(text=content, metadata=metadata))
+        filename = Path(path).stem
+        with open('data/chunks/' + filename + f'_{method.value}_chunks.txt', 'w', encoding="utf-8") as f:
+            for i,chunk in enumerate(chunks):
+                content = _unmask_math(chunk.page_content, formulas)
+                metadata = dict(chunk.metadata)  # enthält bei MARKDOWN h1/h2/h3
+                metadata["source"] = path
+                metadata["method"] = method.value
+                if page_no is not None:
+                    metadata["page"] = page_no
+                records.append(ChunkRecord(text=content, metadata=metadata))
+
+
+                f.write(f'========== CHUNK {i} ========== \n')
+                f.write(chunk.page_content + '\n')
+
 
     return records
 
@@ -387,3 +393,6 @@ if __name__ == "__main__":
     # Optionales Methoden-Argument, z. B.:  python chunking.py markdown
     chosen = sys.argv[1] if len(sys.argv) > 1 else ChunkingMethod.MARKDOWN
     chunk_all(chosen)
+
+
+

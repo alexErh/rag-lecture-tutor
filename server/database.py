@@ -4,7 +4,7 @@ Kapselt den ChromaDB-Client, die Collection und das Embedding-Modell sowie die
 Funktionen zum Hinzufügen und Abrufen von Chunks. Das Chunking selbst liegt in
 chunking.py.
 """
-
+from chromadb import QueryResult
 import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor dem Embedding-Modell
 
 import hashlib
@@ -83,8 +83,8 @@ def add_document(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECU
     # Nur Chunks derselben Quelle UND Methode entfernen (keine Duplikate).
     try:
         target.delete(where={"$and": [{"source": path}, {"method": method.value}]})
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[FEHLER] target.delete:  {e}")
 
     if not records:
         return 0
@@ -134,6 +134,25 @@ def retrieve_chunks(query: str, n: int = 3, method: "str | ChunkingMethod | None
         n_results=n,
         where=_method_filter(method),
     )
+
+def retrieve_chunks_dynamic(query: str, thresh_hold: float = 0.3, method: "str | ChunkingMethod | None" = None):
+    # LATE: eigene Collection, Query mit demselben Late-Modell embedden (gleicher Raum).
+    print("Retrieving chunks...\n", "Chunking Method:\t", method)
+    query_result: QueryResult
+    if _is_late(method):
+        query_result = _late_collection().query(
+            query_embeddings=[embed_query_late(query)],
+            n_results=100,
+        )
+    # Sonst: Standard-Collection; method=None -> alle, sonst nur die gewählte Methode.
+    query_result = collection.query(
+        query_texts=[query],
+        n_results=100,
+        where=_method_filter(method),
+    )
+    return [
+        chunk for chunk, distance in zip(query_result["documents"][0], query_result['distances'][0]) if distance <= thresh_hold
+    ]
 
 
 def retrieve_through_metadata(filename: str, method: "str | ChunkingMethod | None" = None):
@@ -192,8 +211,14 @@ def add_all(method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
 
 
 if __name__ == "__main__":
-    import sys
+    """
+     import sys
 
     # Optionales Methoden-Argument, z. B.:  python database.py markdown
     chosen = sys.argv[1] if len(sys.argv) > 1 else ChunkingMethod.RECURSIVE
     add_all(chosen)
+    
+    """
+    print(retrieve_chunks('Wie viele Urlaubstage habe ich pro Jahr?',n=5, method=ChunkingMethod.MARKDOWN))
+    print('======== SPLIT ========')
+    print(retrieve_chunks_dynamic('Wie viele Urlaubstage habe ich pro Jahr?', thresh_hold=0.4, method=ChunkingMethod.MARKDOWN))

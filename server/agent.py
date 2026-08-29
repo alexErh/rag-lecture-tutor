@@ -33,6 +33,8 @@ _request_method: contextvars.ContextVar = contextvars.ContextVar(
     "request_method", default=None
 )
 
+DYNAMIC_RETREIVAL = os.getenv('DYNAMIC_RETREIVAL',default='False').strip().lower() in ['True', 'true', '1', 'yes', 'ja']
+
 
 SYSTEM_PROMPT = (
     "# Rolle\n"
@@ -114,7 +116,10 @@ def search_lecture_docs(query: str):
     """Holt die passenden Chunks per semantischer Suche aus der Vektor-DB."""
     method = _request_method.get()
     print("Chunking Method:\t", method)
-    results = retrieve_chunks(query, 5, method=method)
+    if DYNAMIC_RETREIVAL:
+        pass
+    else:
+        results = retrieve_chunks(query, 5, method=method)
     # collection.query liefert je Abfrage verschachtelte Listen -> [0].
     documents = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
