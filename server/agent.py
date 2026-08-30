@@ -19,7 +19,7 @@ from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
 from chunking import ChunkingMethod
-from database import retrieve_chunks, retrieve_through_metadata
+from database import retrieve_chunks, retrieve_through_metadata, retrieve_chunks_dynamic
 
 # .env laden (LOCAL, LOCAL_BASE_URL, LOCAL_MODEL_NAME, NVIDIA_API_KEY)
 load_dotenv()
@@ -117,7 +117,7 @@ def search_lecture_docs(query: str):
     method = _request_method.get()
     print("Chunking Method:\t", method)
     if DYNAMIC_RETREIVAL:
-        pass
+        results = retrieve_chunks_dynamic(query=query, method=method)
     else:
         results = retrieve_chunks(query, 5, method=method)
     # collection.query liefert je Abfrage verschachtelte Listen -> [0].
