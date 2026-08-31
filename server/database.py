@@ -5,7 +5,7 @@ Funktionen zum Hinzufügen und Abrufen von Chunks. Das Chunking selbst liegt in
 chunking.py.
 """
 from chromadb import QueryResult
-import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor dem Embedding-Modell
+import server.hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor dem Embedding-Modell
 
 import hashlib
 import uuid
@@ -14,7 +14,7 @@ from pathlib import Path
 import chromadb
 from chromadb.utils import embedding_functions
 
-from chunking import (
+from server.chunking import (
     chunk_file,
     embed_query_late,
     ChunkingMethod,
@@ -135,7 +135,7 @@ def retrieve_chunks(query: str, n: int = 3, method: "str | ChunkingMethod | None
         where=_method_filter(method),
     )
 
-def retrieve_chunks_dynamic(query: str, thresh_hold: float = 0.3, method: "str | ChunkingMethod | None" = None):
+def retrieve_chunks_dynamic(query: str, thresh_hold: float = 0.4, method: "str | ChunkingMethod | None" = None) -> QueryResult:
     # LATE: eigene Collection, Query mit demselben Late-Modell embedden (gleicher Raum).
     print("Retrieving chunks...\n", "Chunking Method:\t", method)
     query_result: QueryResult
@@ -144,15 +144,34 @@ def retrieve_chunks_dynamic(query: str, thresh_hold: float = 0.3, method: "str |
             query_embeddings=[embed_query_late(query)],
             n_results=100,
         )
-    # Sonst: Standard-Collection; method=None -> alle, sonst nur die gewählte Methode.
-    query_result = collection.query(
-        query_texts=[query],
-        n_results=100,
-        where=_method_filter(method),
-    )
-    return [
-        chunk for chunk, distance in zip(query_result["documents"][0], query_result['distances'][0]) if distance <= thresh_hold
+    else:
+        # Sonst: Standard-Collection; method=None -> alle, sonst nur die gewählte Methode.
+        query_result = collection.query(
+            query_texts=[query],
+            n_results=100,
+            where=_method_filter(method),
+        )
+    documents = query_result["documents"][0]
+    distances = query_result["distances"][0]
+    ids = query_result["ids"][0]
+    metadatas = query_result.get("metadatas", [[]])[0]
+
+    filtered = [
+        (doc, distance, id_, metadata)
+        for doc, distance, id_, metadata in zip(
+            documents, distances, ids, metadatas
+        )
+        if distance <= thresh_hold
     ]
+
+    tmp_result: QueryResult = {
+        "documents": [[x[0] for x in filtered]],
+        "distances": [[x[1] for x in filtered]],
+        "ids": [[x[2] for x in filtered]],
+        "metadatas": [[x[3] for x in filtered]],
+    }
+    return tmp_result
+
 
 
 def retrieve_through_metadata(filename: str, method: "str | ChunkingMethod | None" = None):
@@ -211,14 +230,12 @@ def add_all(method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
 
 
 if __name__ == "__main__":
-    """
-     import sys
+    import sys
 
     # Optionales Methoden-Argument, z. B.:  python database.py markdown
     chosen = sys.argv[1] if len(sys.argv) > 1 else ChunkingMethod.RECURSIVE
     add_all(chosen)
-    
-    """
-    print(retrieve_chunks('Wie viele Urlaubstage habe ich pro Jahr?',n=5, method=ChunkingMethod.MARKDOWN))
-    print('======== SPLIT ========')
-    print(retrieve_chunks_dynamic('Wie viele Urlaubstage habe ich pro Jahr?', thresh_hold=0.4, method=ChunkingMethod.MARKDOWN))
+
+
+
+

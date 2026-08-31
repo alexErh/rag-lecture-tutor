@@ -24,7 +24,7 @@ umgestellt (TokenChunker = fixed-size, SemanticChunker, RecursiveChunker/Struktu
 das gemeinsame Rückgabeformat ChunkRecord ist dafür schon vorbereitet.
 """
 
-import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor HF-nutzenden Imports
+import server.hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor HF-nutzenden Imports
 
 import os
 import re
