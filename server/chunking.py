@@ -2,11 +2,13 @@
 
 Chunking-Methoden, unterscheidbar über das Enum ChunkingMethod:
 
-* RECURSIVE  – zeichenbasiertes Splitten mit RecursiveCharacterTextSplitter
-               (kleine, gleichmäßige Chunks; ignoriert die Dokumentstruktur).
-* MARKDOWN   – strukturbasiertes Splitten mit MarkdownHeaderTextSplitter: teilt
-               zuerst an den Überschriften (#/##/###) und hängt die Hierarchie als
-               Metadaten (h1/h2/h3) an. Große Abschnitte werden begrenzt.
+* RECURSIVE  – Fixed-Size Chunking mit Overlap (Chonkie TokenChunker), token-basiert;
+               gleichmäßige Chunks am Token-Budget des Embedding-Modells.
+* MARKDOWN   – Document-Based/Structural Chunking (Chonkie RecursiveChunker): trennt
+               hierarchisch bevorzugt an Überschriften/Absätzen/Sätzen und packt bis
+               zur Chunk-Größe (KEINE h1/h2/h3-Metadaten).
+* SEMANTIC   – Semantic Chunking (Chonkie SemanticChunker): trennt an semantischen
+               Ähnlichkeitsgrenzen zwischen Sätzen.
 * LATE       – Late Chunking mit Chonkie: der (lange) Text wird ZUERST embeddet
                (Token-Level), dann werden Chunk-Grenzen gelegt und die Token-Vektoren
                PRO Chunk gemittelt. Jeder Chunk-Vektor trägt so Dokumentkontext.
@@ -15,29 +17,22 @@ Chunking-Methoden, unterscheidbar über das Enum ChunkingMethod:
                gespeichert (siehe database.py), weil ihre Dimension vom Standard-
                Embedding-Modell abweicht.
 
+Alle Methoden nutzen ausschließlich Chonkie (kein LangChain mehr).
 Die (text-basierten) Methoden schützen LaTeX-Formeln vor dem Zerschneiden (siehe
 Formel-Schutz). Jeder Chunk wird mit metadata['method'] markiert, damit die DB
 gezielt nach den Chunks einer bestimmten Methode suchen kann.
-
-Perspektive: die übrigen Methoden werden schrittweise ebenfalls auf Chonkie
-umgestellt (TokenChunker = fixed-size, SemanticChunker, RecursiveChunker/Struktur);
-das gemeinsame Rückgabeformat ChunkRecord ist dafür schon vorbereitet.
 """
 
 import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor HF-nutzenden Imports
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
-from langchain_text_splitters import (
-    MarkdownHeaderTextSplitter,
-    RecursiveCharacterTextSplitter,
-)
-from langchain_core.documents import Document
-from chonkie import SemanticChunker
+from chonkie import RecursiveChunker, SemanticChunker, TokenChunker
+from chonkie.types.recursive import RecursiveLevel, RecursiveRules
 
 
 # ========= CHUNKING-METHODEN =========
@@ -84,32 +79,43 @@ class ChunkRecord:
 
 # Embedding-Modell (paraphrase-multilingual-MiniLM-L12-v2) verarbeitet max. 128
 # Tokens (~400-500 Zeichen). Größere Chunks würden beim Embedden abgeschnitten,
-# darum begrenzen beide Methoden die Chunk-Größe entsprechend.
+# darum begrenzen die text-basierten Methoden die Chunk-Größe entsprechend.
 
-# RECURSIVE: kleine, gleichmäßige Chunks rein nach Trennzeichen.
-_recursive_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=200,
-    chunk_overlap=20,
-    separators=["\n\n", "\n", ". ", " "],
+# RECURSIVE = Fixed-Size Chunking mit Overlap (Chonkie TokenChunker), token-basiert.
+# chunk_size in Tokens des Embedding-Modells -> passt exakt auf dessen 128-Token-Budget.
+# chunk_overlap (16) >= Länge der Formel-Platzhalter, damit eine maskierte Formel nie
+# über eine Chunk-Grenze verloren geht (sie erscheint dann ganz im Überlappungs-Chunk).
+_recursive_splitter = TokenChunker(
+    tokenizer="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    chunk_size=128,
+    chunk_overlap=16,
 )
 
-# MARKDOWN: erst an Überschriften trennen (Struktur + Header-Metadaten) ...
-_MD_HEADERS = [("#", "h1"), ("##", "h2"), ("###", "h3")]
-_md_header_splitter = MarkdownHeaderTextSplitter(
-    headers_to_split_on=_MD_HEADERS,
-    strip_headers=False,  # Überschrift im Chunk-Text belassen (guter Kontext)
+# MARKDOWN = Document-Based/Structural Chunking (Chonkie RecursiveChunker). Trennt
+# hierarchisch bevorzugt an Überschriften, dann Absätzen/Zeilen, dann Sätzen, und
+# packt bis chunk_size. Anders als der frühere LangChain-Header-Splitter werden KEINE
+# h1/h2/h3-Metadaten mehr extrahiert (Chonkie liefert die Struktur nicht als Metadaten).
+_md_rules = RecursiveRules(
+    levels=[
+        RecursiveLevel(delimiters=None, pattern=r"\n(?=#{1,6}\s)", pattern_mode="split"),  # Überschriften
+        RecursiveLevel(delimiters=["\n\n", "\n"]),   # Absätze / Zeilen
+        RecursiveLevel(delimiters=[". ", "! ", "? "]),  # Sätze
+        RecursiveLevel(whitespace=True),             # Wörter (Fallback)
+    ]
 )
-# ... dann zu große Abschnitte auf embeddbare Größe begrenzen (Metadaten bleiben).
-_md_size_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=400,
-    chunk_overlap=40,
-    separators=["\n\n", "\n", ". ", " "],
+_markdown_chunker = RecursiveChunker(
+    tokenizer="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    chunk_size=128,
+    rules=_md_rules,
+    min_characters_per_chunk=24,
 )
 
 _semantic_splitter = SemanticChunker(
     embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
     threshold=0.7,
-    chunk_size=4096,
+    # chunk_size an das 128-Token-Fenster des Embedding-Modells angepasst, damit
+    # semantische Chunks beim Embedden nicht abgeschnitten werden.
+    chunk_size=128,
     skip_window=1
 )
 
@@ -126,10 +132,10 @@ _MATH_PATTERNS = [
     re.compile(r"\\\(.*?\\\)", re.DOTALL),   # Inline: \( ... \)
 ]
 
-# Platzhalter aus Zeichen, die NICHT in den Splitter-Separatoren vorkommen
-# (kein Leerzeichen, kein Zeilenumbruch, kein ". "). Ohne diese Trennzeichen kann
-# der RecursiveCharacterTextSplitter den Platzhalter nicht in der Mitte trennen –
-# im Extremfall entsteht ein etwas zu großer Chunk, die Formel bleibt aber ganz.
+# Platzhalter aus seltenen Zeichen (kein Separator der Chunker). Wird er dennoch an
+# einer Chunk-Grenze getrennt, sorgt der Chunk-Overlap (>= Platzhalter-Länge) dafür,
+# dass der Platzhalter im Überlappungs-Chunk ganz erscheint und dort wiederhergestellt
+# wird – die Formel bleibt also erhalten.
 _PLACEHOLDER = "⟦MATH{}⟧"  # ⟦MATH0⟧, ⟦MATH1⟧, ...
 
 
@@ -267,30 +273,19 @@ def _late_chunks(text: str, path: str) -> "list[ChunkRecord]":
 
 # ========= SPLITTER PRO METHODE (text-basiert) =========
 
-def _recursive_chunks(masked_text: str, path: str) -> list[Document]:
-    document = Document(page_content=masked_text, metadata={"source": path})
-    return _recursive_splitter.split_documents([document])
+def _recursive_chunks(masked_text: str):
+    """Fixed-Size Chunks (Chonkie TokenChunker) – liefert die Chonkie-Chunks."""
+    return _recursive_splitter.chunk(masked_text)
 
 
-def _markdown_chunks(masked_text: str, path: str) -> list[Document]:
-    # 1) An Überschriften trennen -> Documents mit h1/h2/h3 in den Metadaten.
-    sections = _md_header_splitter.split_text(masked_text)
-    # 2) Zu große Abschnitte auf embeddbare Größe begrenzen (Header-Metadaten bleiben).
-    return _md_size_splitter.split_documents(sections)
+def _markdown_chunks(masked_text: str):
+    """Struktur-bewusstes Splitten (Chonkie RecursiveChunker)."""
+    return _markdown_chunker.chunk(masked_text)
 
-# Chonkie Semantic Chunking
-def _semantic_chunks(masked_text: str, path: str) -> list[Document]:
-    chunks = _semantic_splitter.chunk(masked_text)
-    # Wandelt einen Chonkie Chunk in ein Dokument um. Wichtig für die Weiterverarbeitung, da sie auf Documents basiert.
-    return [
-        Document(
-            page_content=chunk.text,
-            metadata={
-                "source": path,
-            },
-        )
-        for chunk in chunks
-    ]
+
+def _semantic_chunks(masked_text: str):
+    """Semantisches Splitten (Chonkie SemanticChunker)."""
+    return _semantic_splitter.chunk(masked_text)
 
 
 def chunk_file(
@@ -325,21 +320,20 @@ def chunk_file(
 
         match method:
             case ChunkingMethod.MARKDOWN:
-                chunks = _markdown_chunks(masked_text, path)
+                chunks = _markdown_chunks(masked_text)
             case ChunkingMethod.RECURSIVE:
-                chunks = _recursive_chunks(masked_text, path)
+                chunks = _recursive_chunks(masked_text)
             case ChunkingMethod.SEMANTIC:
-                chunks = _semantic_chunks(masked_text, path)
+                chunks = _semantic_chunks(masked_text)
 
-        # ... Formeln je Chunk wiederherstellen und Metadaten vereinheitlichen.
+        # ... Formeln je Chunk wiederherstellen und als ChunkRecord sammeln.
         for chunk in chunks:
-            content = _unmask_math(chunk.page_content, formulas)
-            metadata = dict(chunk.metadata)  # enthält bei MARKDOWN h1/h2/h3
-            metadata["source"] = path
-            metadata["method"] = method.value
+            metadata = {"source": path, "method": method.value}
             if page_no is not None:
                 metadata["page"] = page_no
-            records.append(ChunkRecord(text=content, metadata=metadata))
+            records.append(
+                ChunkRecord(text=_unmask_math(chunk.text, formulas), metadata=metadata)
+            )
 
     return records
 

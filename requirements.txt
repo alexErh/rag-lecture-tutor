@@ -3,7 +3,6 @@ langchain_openai
 langchain
 python-dotenv
 chromadb
-langchain_text_splitters
 fastapi
 docling
 sentence-transformers
