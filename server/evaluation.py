@@ -14,7 +14,7 @@ tests = {
 
 
 
-def run_evaluation(dynamic: bool):
+def run_evaluation(dynamic: bool, threshold: float = 0.7, n_param: int = 3):
     results = {}
     specific_results = []
     for method in ChunkingMethod:
@@ -27,9 +27,10 @@ def run_evaluation(dynamic: bool):
             acc_f1: float = 0.0
             for test_case in test:
                 if dynamic:
-                    retrieval = db.retrieve_chunks_dynamic(query=test_case['query'], thresh_hold=0.7, method=method.value)
+                    print(f"HTRESHOLD: {threshold}")
+                    retrieval = db.retrieve_chunks_dynamic(query=test_case['query'], thresh_hold=threshold, method=method.value)
                 else:
-                    retrieval = db.retrieve_chunks(query=test_case['query'], n=3, method=method.value)
+                    retrieval = db.retrieve_chunks(query=test_case['query'], n=n_param, method=method.value)
                 retrieval = "\n".join(retrieval["documents"][0])
                 pr, rc, iou, f1 = calculate_iou(ground_truth=string_to_tokens(test_case['ground_truth']),
                                             retrieved=string_to_tokens(retrieval))
@@ -108,12 +109,11 @@ def string_to_tokens(some_string: str):
     return tokens
 
 if __name__ == '__main__':
-    results, specific_results = run_evaluation(dynamic=False)
+    results, specific_results = run_evaluation(dynamic=False, n_param=3)
+    results_dyn, specific_results_dyn = run_evaluation(dynamic=True, threshold=0.3)
     print('====================')
     for method_name, method in results.items():
         print(f"{method_name}:    {method["SKRIPT_TEST"]}")
-
-    results_dyn, specific_results_dyn = run_evaluation(dynamic=True)
     print('====================')
     for method_name, method in results_dyn.items():
         print(f"{method_name}:    {method["SKRIPT_TEST"]}")
