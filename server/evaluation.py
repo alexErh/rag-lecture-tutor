@@ -12,10 +12,11 @@ tests = {
     "SLIDES_TEST": SLIDES_TEST,
 }
 
-results = {}
-specific_results = []
+
 
 def run_evaluation(dynamic: bool):
+    results = {}
+    specific_results = []
     for method in ChunkingMethod:
         method_results = {}
         for test_name, test in tests.items():
@@ -23,22 +24,25 @@ def run_evaluation(dynamic: bool):
             acc_pr: float = 0.0
             acc_rc: float = 0.0
             acc_iou: float = 0.0
+            acc_f1: float = 0.0
             for test_case in test:
                 if dynamic:
                     retrieval = db.retrieve_chunks_dynamic(query=test_case['query'], thresh_hold=0.7, method=method.value)
                 else:
                     retrieval = db.retrieve_chunks(query=test_case['query'], n=3, method=method.value)
                 retrieval = "\n".join(retrieval["documents"][0])
-                pr, rc, iou = calculate_iou(ground_truth=string_to_tokens(test_case['ground_truth']),
+                pr, rc, iou, f1 = calculate_iou(ground_truth=string_to_tokens(test_case['ground_truth']),
                                             retrieved=string_to_tokens(retrieval))
                 acc_pr += pr
                 acc_rc += rc
                 acc_iou += iou
+                acc_f1 += f1
                 result = {
                     'id': test_case['id'],
                     'precision': pr,
                     'recall': rc,
                     'iou': iou,
+                    'f1': f1,
                     'method': method.value,
                 }
                 specific_results.append(result)
@@ -47,14 +51,17 @@ def run_evaluation(dynamic: bool):
                 avg_pr = acc_pr / n
                 avg_rc = acc_rc / n
                 avg_iou = acc_iou / n
+                avg_f1 = acc_f1 / n
                 test_results["precision"] = avg_pr
                 test_results["recall"] = avg_rc
                 test_results["iou"] = avg_iou
+                test_results["f1"] = avg_f1
                 method_results[test_name] = test_results
             else:
                 test_results["precision"] = 0.0
                 test_results["recall"] = 0.0
                 test_results["iou"] = 0.0
+                test_results["f1"] = 0.0
                 method_results[test_name] = test_results
 
         all_tests_averages = {}
@@ -63,13 +70,16 @@ def run_evaluation(dynamic: bool):
                                 method_results["SLIDES_TEST"]["recall"]) / 3
         avg_iou_all_tests = (method_results["SKRIPT_TEST"]["iou"] + method_results["SKRIPT_FORMULA_TEST"]["iou"] +
                                 method_results["SLIDES_TEST"]["iou"]) / 3
+        avg_f1_all_tests = (method_results["SKRIPT_TEST"]["f1"] + method_results["SKRIPT_FORMULA_TEST"]["f1"] +
+                                method_results["SLIDES_TEST"]["f1"]) / 3
         all_tests_averages["precision"] = avg_pr_all_tests
         all_tests_averages["recall"] = avg_rc_all_tests
         all_tests_averages["iou"] = avg_iou_all_tests
+        all_tests_averages["f1"] = avg_f1_all_tests
 
         method_results["overall"] = all_tests_averages
         results[method.value] = method_results
-
+    return results, specific_results
 
 
 
@@ -86,10 +96,11 @@ def calculate_iou(ground_truth: list[str], retrieved: list[str]):
             len(intersection)
             / (len(gt) + len(retrieved) - len(intersection))
         )
+        f1 = (2 * precision * recall) / (precision + recall)
     except ZeroDivisionError:
         print('E: Division by zero')
-        return 0,0,0
-    return precision, recall, iou
+        return 0,0,0,0
+    return precision, recall, iou, f1
 
 def string_to_tokens(some_string: str):
     tokens = some_string.lower().split()
@@ -97,5 +108,12 @@ def string_to_tokens(some_string: str):
     return tokens
 
 if __name__ == '__main__':
-    run_evaluation(dynamic=False)
-    print(results)
+    results, specific_results = run_evaluation(dynamic=False)
+    print('====================')
+    for method_name, method in results.items():
+        print(f"{method_name}:    {method["SKRIPT_TEST"]}")
+
+    results_dyn, specific_results_dyn = run_evaluation(dynamic=True)
+    print('====================')
+    for method_name, method in results_dyn.items():
+        print(f"{method_name}:    {method["SKRIPT_TEST"]}")
