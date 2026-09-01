@@ -11,6 +11,9 @@ server/data/raw/*
 server/data/processed/*
 !server/data/processed/example.md
 
+# Test-Ausgaben (z. B. NIM-Prototypen) nicht committen
+server/data/test/
+
 # Hochzuladende PDFs (Client-Ordner) nicht committen; nur den Ordner behalten
 input_pdfs/*
 !input_pdfs/.gitkeep
@@ -20,3 +23,5 @@ __pycache__/
 
 # Generierte Vektor-DB (ChromaDB) nicht committen
 server/VectorDB/
+/server/prototype_docling_nim_formula.py
+/server/prototype_pdf_to_markdown_nim.py
