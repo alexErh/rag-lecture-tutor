@@ -72,6 +72,9 @@ SYSTEM_PROMPT = (
 # LOCAL=true -> lokales Ollama-Modell; LOCAL=false -> Nvidia NIM API.
 LOCAL = os.getenv("LOCAL", "true").strip().lower() in ("1", "true", "yes", "ja")
 
+# DEBUG=true -> zusätzliche Konsolen-Ausgaben (z. B. gefundene Chunks im Retrieval).
+DEBUG = os.getenv("DEBUG", "false").strip().lower() in ("1", "true", "yes", "ja")
+
 
 def _format_hits(documents, metadatas, distances=None):
     """Bereitet Chunks flach auf: pro Treffer content + source + page (+ distance).
@@ -124,6 +127,18 @@ def search_lecture_docs(query: str):
     documents = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []
     distances = results["distances"][0] if results["distances"] else []
+
+    # Nur bei DEBUG=true: gefundene Chunks in der Konsole ausgeben
+    # (Distanz, Quelle+Seite, Text-Auszug).
+    if DEBUG:
+        print(f"[search_lecture_docs] Methode: {method} | Query: {query!r} "
+              f"-> {len(documents)} Chunk(s):")
+        for i, (doc, meta, dist) in enumerate(zip(documents, metadatas, distances), 1):
+            src = os.path.basename(str(meta.get("source", "")).replace("\\", "/"))
+            page = meta.get("page")
+            text = " ".join(doc.split())  # Zeilenumbrüche für die Konsole glätten
+            print(f"  [{i}] dist={dist:.3f} | {src} S.{page} | {text[:120]}")
+
     return {"results": _format_hits(documents, metadatas, distances)}
 
 

@@ -269,6 +269,14 @@ def count_chunks_by_file_and_method():
     return counts
 
 if __name__ == "__main__":
+
+    # add_all einmal pro Chunking-Methode aufrufen (insgesamt vier Läufe:
+    # recursive, markdown, semantic, late). Alle Methoden koexistieren in der DB.
+    #for method in ChunkingMethod:
+        #print(f"\n{'=' * 70}\nMethode: {method.value}\n{'=' * 70}")
+        #add_all(method)
+
+
     #count_chunks_by_file_and_method()
     import sys
 
