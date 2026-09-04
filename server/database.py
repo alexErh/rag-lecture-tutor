@@ -6,7 +6,7 @@ chunking.py.
 """
 from chromadb import QueryResult
 import server.hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor dem Embedding-Modell
-
+from collections import Counter
 import hashlib
 import uuid
 from pathlib import Path
@@ -137,25 +137,25 @@ def retrieve_chunks(query: str, n: int = 3, method: "str | ChunkingMethod | None
 
 def retrieve_chunks_dynamic(query: str, thresh_hold: float = 0.4, method: "str | ChunkingMethod | None" = None) -> QueryResult:
     # LATE: eigene Collection, Query mit demselben Late-Modell embedden (gleicher Raum).
-    print("Retrieving chunks...\n", "Chunking Method:\t", method)
+    #print("Retrieving chunks...\n", "Chunking Method:\t", method)
     query_result: QueryResult
     if _is_late(method):
         query_result = _late_collection().query(
             query_embeddings=[embed_query_late(query)],
-            n_results=100,
+            n_results=5000,
         )
     else:
         # Sonst: Standard-Collection; method=None -> alle, sonst nur die gewählte Methode.
         query_result = collection.query(
             query_texts=[query],
-            n_results=100,
+            n_results=5000,
             where=_method_filter(method),
         )
     documents = query_result["documents"][0]
     distances = query_result["distances"][0]
     ids = query_result["ids"][0]
     metadatas = query_result.get("metadatas", [[]])[0]
-
+    print(f"{method}: Chunks retrieved: {len(documents)}")
     filtered = [
         (doc, distance, id_, metadata)
         for doc, distance, id_, metadata in zip(
@@ -170,6 +170,7 @@ def retrieve_chunks_dynamic(query: str, thresh_hold: float = 0.4, method: "str |
         "ids": [[x[2] for x in filtered]],
         "metadatas": [[x[3] for x in filtered]],
     }
+    print(f"{method}: Chunks after distance filtering (threshold={thresh_hold}): {len(filtered)}")
     return tmp_result
 
 
@@ -227,9 +228,48 @@ def add_all(method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
         f"Collection-Gesamt: {target.count()}"
     )
     return results
+def count_chunks_by_file_and_method():
+    results = []
 
+    # Standard-Collection
+    data = collection.get(include=["metadatas"])
+
+    for metadata in data["metadatas"]:
+        if metadata:
+            results.append({
+                "source": metadata.get("source", "unknown"),
+                "method": metadata.get("method", "unknown"),
+            })
+
+    # LATE-Collection
+    late_data = _late_collection().get(include=["metadatas"])
+
+    for metadata in late_data["metadatas"]:
+        if metadata:
+            results.append({
+                "source": metadata.get("source", "unknown"),
+                "method": metadata.get("method", "unknown"),
+            })
+
+    # Zählen
+    counts = Counter(
+        (item["source"], item["method"])
+        for item in results
+    )
+
+    print("\n========== CHUNK-ANZAHLEN ==========")
+
+    for (source, method), count in sorted(counts.items()):
+        print(
+            f"{Path(source).name:35} | "
+            f"{method:20} | "
+            f"{count:5} Chunks"
+        )
+
+    return counts
 
 if __name__ == "__main__":
+    #count_chunks_by_file_and_method()
     import sys
 
     # Optionales Methoden-Argument, z. B.:  python database.py markdown
@@ -240,7 +280,7 @@ if __name__ == "__main__":
         add_document("data/processed/PM-01-Einfuehrung.md", method=method)
         add_document("data/processed/ti1-1-45.md", method=method)
 
-
+# recursive: Chunks retrieved: 2159
 
 
 
