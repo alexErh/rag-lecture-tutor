@@ -18,6 +18,7 @@ Nutzung (aus dem server/-Ordner):
 
 import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor docling-Import
 import re
+import time
 from pathlib import Path
 
 # Pfade relativ zu dieser Datei (server/), damit der Aufruf vom cwd unabhängig ist.
@@ -102,8 +103,8 @@ def _clean_formula_markdown(markdown: str) -> str:
 def _build_converter(
     enable_formulas: bool = True,
     enable_ocr: bool = False,
-    layout_preset: str = "layout_egret_xlarge",
-    formula_scale: float = 3.0,
+    layout_preset: str = "layout_egret_large",
+    formula_scale: float = 2.0,
     num_threads: int | None = None,
 ):
     """Erzeugt einen docling-DocumentConverter (Import lazy, mit klarer Fehlermeldung).
@@ -240,6 +241,19 @@ def convert_pdf(
     return out_path
 
 
+def _page_count(pdf_path: Path) -> int | None:
+    """Seitenzahl einer PDF für die s/Seite-Schätzung (None, wenn nicht ermittelbar)."""
+    try:
+        import pypdfium2 as pdfium
+
+        doc = pdfium.PdfDocument(str(pdf_path))
+        n = len(doc)
+        doc.close()
+        return n
+    except Exception:
+        return None
+
+
 def convert_all(
     overwrite: bool = False,
     enable_formulas: bool = True,
@@ -258,19 +272,36 @@ def convert_all(
     converter = _build_converter(enable_formulas=enable_formulas)
 
     outputs = []
+    durations: list[float] = []  # nur erfolgreich konvertierte (nicht übersprungene) Dateien
+    run_start = time.perf_counter()
     for i, pdf_path in enumerate(pdf_files, start=1):
         print(f"[{i}/{len(pdf_files)}] {pdf_path.name}")
+        t0 = time.perf_counter()
         try:
-            outputs.append(
-                convert_pdf(
-                    pdf_path,
-                    converter=converter,
-                    overwrite=overwrite,
-                    clean_formulas=clean_formulas,
-                )
+            out_path = convert_pdf(
+                pdf_path,
+                converter=converter,
+                overwrite=overwrite,
+                clean_formulas=clean_formulas,
             )
+            elapsed = time.perf_counter() - t0
+            outputs.append(out_path)
+            # Übersprungene Dateien (existieren bereits) verfälschen den Schnitt nicht.
+            if overwrite or elapsed > 1.0:
+                durations.append(elapsed)
+                pages = _page_count(pdf_path)
+                per_page = f", {elapsed / pages:.1f}s/Seite ({pages} S.)" if pages else ""
+                print(f"    Dauer: {elapsed:.1f}s{per_page}")
         except Exception as exc:
             print(f"    [FEHLER] {pdf_path.name}: {exc}")
+
+    total = time.perf_counter() - run_start
+    if durations:
+        avg = sum(durations) / len(durations)
+        print(
+            f"\nZeit gesamt: {total:.1f}s | konvertiert: {len(durations)} Datei(en) "
+            f"| Schnitt: {avg:.1f}s/Datei"
+        )
     return outputs
 
 

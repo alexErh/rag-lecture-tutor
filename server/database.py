@@ -8,6 +8,7 @@ chunking.py.
 import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor dem Embedding-Modell
 
 import hashlib
+import time
 import uuid
 from pathlib import Path
 
@@ -174,10 +175,14 @@ def add_all(method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
 
     print(f"In DB laden | Methode: {method.value} | {len(md_files)} Datei(en)\n")
     results: list[tuple[str, int]] = []
+    total_time = 0.0
     for md in md_files:
         try:
+            t0 = time.perf_counter()
             n = add_document(str(md), method=method)
-            print(f"  {md.name}: {n} Chunks gespeichert")
+            dt = time.perf_counter() - t0
+            total_time += dt
+            print(f"  {md.name}: {n} Chunks gespeichert | {dt:.2f}s")
             results.append((md.name, n))
         except Exception as exc:
             print(f"  [FEHLER] {md.name}: {exc}")
@@ -186,6 +191,7 @@ def add_all(method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
     target = _late_collection() if method is ChunkingMethod.LATE else collection
     print(
         f"\nFertig: {len(results)} Datei(en), {total} Chunks gespeichert. "
+        f"Zeit: {total_time:.2f}s (Methode: {method.value}). "
         f"Collection-Gesamt: {target.count()}"
     )
     return results
