@@ -147,7 +147,7 @@ def ingest(
     for filename, pdf_path in saved:
         try:
             md_path = convert_pdf(pdf_path, converter=converter, overwrite=True)
-            n_chunks = add_document(str(md_path), method=method)
+            n_chunks = add_document(str(md_path), method=method.value)
             print('N Chunks: ', n_chunks)
             results.append({
                 "file": filename,

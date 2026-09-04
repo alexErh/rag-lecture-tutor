@@ -233,8 +233,15 @@ if __name__ == "__main__":
     import sys
 
     # Optionales Methoden-Argument, z. B.:  python database.py markdown
-    chosen = sys.argv[1] if len(sys.argv) > 1 else ChunkingMethod.RECURSIVE
-    add_all(chosen)
+    #chosen = sys.argv[1] if len(sys.argv) > 1 else ChunkingMethod.RECURSIVE
+    #add_all(chosen)
+    for method in ChunkingMethod:
+        add_document("data/processed/SoftwareEngineering.md", method=method)
+        add_document("data/processed/PM-01-Einfuehrung.md", method=method)
+        add_document("data/processed/ti1-1-45.md", method=method)
+
+
+
 
 
 

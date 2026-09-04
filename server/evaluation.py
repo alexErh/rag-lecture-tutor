@@ -27,7 +27,6 @@ def run_evaluation(dynamic: bool, threshold: float = 0.7, n_param: int = 3):
             acc_f1: float = 0.0
             for test_case in test:
                 if dynamic:
-                    print(f"HTRESHOLD: {threshold}")
                     retrieval = db.retrieve_chunks_dynamic(query=test_case['query'], thresh_hold=threshold, method=method.value)
                 else:
                     retrieval = db.retrieve_chunks(query=test_case['query'], n=n_param, method=method.value)
@@ -110,10 +109,10 @@ def string_to_tokens(some_string: str):
 
 if __name__ == '__main__':
     results, specific_results = run_evaluation(dynamic=False, n_param=3)
-    results_dyn, specific_results_dyn = run_evaluation(dynamic=True, threshold=0.3)
-    print('====================')
+    results_dyn, specific_results_dyn = run_evaluation(dynamic=True, threshold=0.35)
+    print('========== STATIC ==========')
     for method_name, method in results.items():
-        print(f"{method_name}:    {method["SKRIPT_TEST"]}")
-    print('====================')
+        print(f"{method_name}:    {method["overall"]}")
+    print('========== DYNAMIC ==========')
     for method_name, method in results_dyn.items():
-        print(f"{method_name}:    {method["SKRIPT_TEST"]}")
+        print(f"{method_name}:    {method["overall"]}")
