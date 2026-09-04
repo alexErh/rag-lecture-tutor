@@ -77,16 +77,21 @@ class ChunkRecord:
 
 # ========= CHUNKER =========
 
-# Embedding-Modell (paraphrase-multilingual-MiniLM-L12-v2) verarbeitet max. 128
-# Tokens (~400-500 Zeichen). Größere Chunks würden beim Embedden abgeschnitten,
-# darum begrenzen die text-basierten Methoden die Chunk-Größe entsprechend.
+# Gemeinsames Embedding-Modell für ALLE Methoden (Option A): ein einziger Vektorraum,
+# damit die Retrieval-Distanzen über alle Methoden vergleichbar sind und eine gemeinsame,
+# faire Schwelle möglich ist (kein Late-Sonderraum mehr). Mehrsprachig + Langkontext
+# (deutschsprachiges Vorlesungsmaterial). Wird auch als Tokenizer der token-basierten
+# Chunker verwendet, damit die 128-Token-Grenze im selben Tokenraum gemessen wird.
+# Per .env überschreibbar.
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
 
 # RECURSIVE = Fixed-Size Chunking mit Overlap (Chonkie TokenChunker), token-basiert.
-# chunk_size in Tokens des Embedding-Modells -> passt exakt auf dessen 128-Token-Budget.
+# chunk_size in Tokens; 128 als bewusst gewählte, für alle Methoden gleiche Granularität
+# (e5-base könnte mehr, aber die feste Größe hält den Methodenvergleich sauber).
 # chunk_overlap (16) >= Länge der Formel-Platzhalter, damit eine maskierte Formel nie
 # über eine Chunk-Grenze verloren geht (sie erscheint dann ganz im Überlappungs-Chunk).
 _recursive_splitter = TokenChunker(
-    tokenizer="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    tokenizer=EMBEDDING_MODEL,
     chunk_size=128,
     chunk_overlap=16,
 )
@@ -104,14 +109,14 @@ _md_rules = RecursiveRules(
     ]
 )
 _markdown_chunker = RecursiveChunker(
-    tokenizer="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    tokenizer=EMBEDDING_MODEL,
     chunk_size=128,
     rules=_md_rules,
     min_characters_per_chunk=24,
 )
 
 _semantic_splitter = SemanticChunker(
-    embedding_model="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    embedding_model=EMBEDDING_MODEL,
     threshold=0.7,
     # chunk_size an das 128-Token-Fenster des Embedding-Modells angepasst, damit
     # semantische Chunks beim Embedden nicht abgeschnitten werden.
@@ -188,12 +193,13 @@ def _split_by_page(text: str) -> "list[tuple[int | None, str]]":
 # ========= LATE CHUNKING (Chonkie) =========
 # Late Chunking embeddet den ganzen Text zuerst und mittelt die Token-Vektoren pro
 # Chunk -> jeder Chunk-Vektor kennt den Dokumentkontext. Das Embedding-Modell muss
-# lang genug sein, damit der Kontext etwas bringt; das Standard-128-Token-Modell ist
-# dafür zu kurz. Modell (und Chunk-Größe) sind per .env konfigurierbar.
+# lang genug sein, damit der Kontext etwas bringt.
 #
-# WICHTIG (deutschsprachiges Material): ein MEHRSPRACHIGES Long-Context-Modell wählen,
-# z. B. LATE_EMBEDDING_MODEL=intfloat/multilingual-e5-base oder jinaai/jina-embeddings-v3.
-LATE_EMBEDDING_MODEL = os.getenv("LATE_EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
+# Option A: Late nutzt standardmäßig DASSELBE EMBEDDING_MODEL wie die übrigen Methoden
+# (ein gemeinsamer Vektorraum). Das gewählte e5-base ist mehrsprachig UND langkontext-
+# fähig (512 Tokens), passt also für beide Rollen. Per .env separat überschreibbar,
+# falls Late doch ein anderes Modell nutzen soll.
+LATE_EMBEDDING_MODEL = os.getenv("LATE_EMBEDDING_MODEL", EMBEDDING_MODEL)
 LATE_CHUNK_SIZE = int(os.getenv("LATE_CHUNK_SIZE", "512"))  # Tokens pro Chunk
 
 _late_embeddings = None  # chonkie SentenceTransformerEmbeddings (lazy)

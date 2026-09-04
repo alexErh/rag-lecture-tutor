@@ -1,6 +1,12 @@
+import os
+
 from test_sets import get_skript_data, get_skript_formula_data, get_slides_data
 from chunking import ChunkingMethod
 import database as db
+
+# Leere-Retrieval-Hinweise (ZeroDivision) nur bei DEBUG – sonst deckt der
+# Coverage-Report im __main__ dieselbe Information sauber ab.
+DEBUG = os.getenv("DEBUG", "false").strip().lower() in ("1", "true", "yes", "ja")
 
 SKRIPT_TEST = get_skript_data()
 SKRIPT_FORMULA_TEST = get_skript_formula_data()
@@ -19,6 +25,7 @@ def run_evaluation(dynamic: bool, threshold: float = 0.7, n_param: int = 3):
     specific_results = []
     for method in ChunkingMethod:
         method_results = {}
+        method_empty = 0  # Fragen ohne einen einzigen abgerufenen Chunk (coverage-Report)
         for test_name, test in tests.items():
             test_results = {}
             acc_pr: float = 0.0
@@ -31,6 +38,9 @@ def run_evaluation(dynamic: bool, threshold: float = 0.7, n_param: int = 3):
                 else:
                     retrieval = db.retrieve_chunks(query=test_case['query'], n=n_param, method=method.value)
                 retrieval = "\n".join(retrieval["documents"][0])
+                is_empty = not retrieval.strip()  # nichts abgerufen (z. B. Schwelle zu streng)
+                if is_empty:
+                    method_empty += 1
                 pr, rc, iou, f1 = calculate_iou(ground_truth=string_to_tokens(test_case['ground_truth']),
                                             retrieved=string_to_tokens(retrieval))
                 acc_pr += pr
@@ -43,6 +53,7 @@ def run_evaluation(dynamic: bool, threshold: float = 0.7, n_param: int = 3):
                     'recall': rc,
                     'iou': iou,
                     'f1': f1,
+                    'empty': is_empty,
                     'method': method.value,
                 }
                 specific_results.append(result)
@@ -77,6 +88,12 @@ def run_evaluation(dynamic: bool, threshold: float = 0.7, n_param: int = 3):
         all_tests_averages["iou"] = avg_iou_all_tests
         all_tests_averages["f1"] = avg_f1_all_tests
 
+        # Coverage: wie viele Fragen lieferten überhaupt Chunks (nicht leer)?
+        total_cases = sum(len(t) for t in tests.values())
+        all_tests_averages["empty"] = method_empty
+        all_tests_averages["total"] = total_cases
+        all_tests_averages["coverage"] = (total_cases - method_empty) / total_cases if total_cases else 0.0
+
         method_results["overall"] = all_tests_averages
         results[method.value] = method_results
     return results, specific_results
@@ -98,7 +115,8 @@ def calculate_iou(ground_truth: list[str], retrieved: list[str]):
         )
         f1 = (2 * precision * recall) / (precision + recall)
     except ZeroDivisionError:
-        print('E: Division by zero')
+        if DEBUG:
+            print('E: Division by zero')
         return 0,0,0,0
     return precision, recall, iou, f1
 
@@ -109,10 +127,21 @@ def string_to_tokens(some_string: str):
 
 if __name__ == '__main__':
     results, specific_results = run_evaluation(dynamic=False, n_param=3)
-    results_dyn, specific_results_dyn = run_evaluation(dynamic=True, threshold=0.35)
-    print('========== STATIC ==========')
-    for method_name, method in results.items():
-        print(f"{method_name}:    {method["overall"]}")
-    print('========== DYNAMIC ==========')
-    for method_name, method in results_dyn.items():
-        print(f"{method_name}:    {method["overall"]}")
+    # Schwelle 0.16: kalibriert für den gemeinsamen e5-base-Vektorraum (Option A).
+    # Alle Methoden liegen jetzt im Distanzbereich ~0.08-0.26 -> die frühere 0.35
+    # würde für ALLE Methoden alles durchlassen.
+    results_dyn, specific_results_dyn = run_evaluation(dynamic=True, threshold=0.16)
+
+    def _print_results(title, res):
+        print(f'========== {title} ==========')
+        for method_name, method in res.items():
+            o = method["overall"]
+            print(
+                f"  {method_name:10s}  P={o['precision']:.3f}  R={o['recall']:.3f}  "
+                f"IoU={o['iou']:.3f}  F1={o['f1']:.3f}  "
+                f"| coverage={o['total'] - o['empty']}/{o['total']} "
+                f"(leer: {o['empty']})"
+            )
+
+    _print_results("STATIC (n=3)", results)
+    _print_results("DYNAMIC (threshold=0.16)", results_dyn)
