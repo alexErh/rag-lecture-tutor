@@ -23,10 +23,10 @@ from pydantic import BaseModel
 from pdf_to_markdown import convert_pdf, _build_converter, RAW_DIR
 
 # Chunking-Methoden (Enum, geteilt mit database.py/agent.py)
-from chunking import ChunkingMethod
+from server.chunking import ChunkingMethod
 
 # DB-Operationen
-from database import (
+from server.database import (
     collection,
     add_document,
     retrieve_chunks,
@@ -178,12 +178,72 @@ def ingest(
     }
 
 
+# ============ OPEN WEBUI TEST =============
+from typing import List, Optional
+from fastapi.responses import StreamingResponse
+
+class OpenAIMessage(BaseModel):
+    role: str
+    content: str
+
+
+class OpenAIChatRequest(BaseModel):
+    model: str = "rag-tutor"
+    messages: List[OpenAIMessage]
+    stream: bool = False
+
+@app.post("/v1/chat/completions")
+def chat_completions(request: OpenAIChatRequest):
+    messages = [
+        (msg.role, msg.content)
+        for msg in request.messages
+    ]
+
+    answer = ask_agent(messages, method=ChunkingMethod.SEMANTIC.value)
+
+    return {
+        "id": "rag-tutor-response",
+        "object": "chat.completion",
+        "model": request.model,
+        "choices": [
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": answer,
+                },
+                "finish_reason": "stop",
+            }
+        ],
+    }
+
+@app.get("/v1/models")
+def models():
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": "rag-tutor",
+                "object": "model",
+                "created": 0,
+                "owned_by": "local",
+            }
+        ],
+    }
+# ==========================================
+
 if __name__ == "__main__":
+    OPEN_WEBUI = True
     import uvicorn
+    if OPEN_WEBUI:
+        ip = "0.0.0.0"
+    else:
+        ip = "127.0.0.1"
 
     uvicorn.run(
         "api:app",
-        host="127.0.0.1",
+        host=ip,
         port=8000,
         reload=True
     )
+

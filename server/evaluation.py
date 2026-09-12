@@ -126,22 +126,92 @@ def string_to_tokens(some_string: str):
     return tokens
 
 if __name__ == '__main__':
-    results, specific_results = run_evaluation(dynamic=False, n_param=3)
-    # Schwelle 0.16: kalibriert für den gemeinsamen e5-base-Vektorraum (Option A).
-    # Alle Methoden liegen jetzt im Distanzbereich ~0.08-0.26 -> die frühere 0.35
-    # würde für ALLE Methoden alles durchlassen.
-    results_dyn, specific_results_dyn = run_evaluation(dynamic=True, threshold=0.16)
 
+    n_values = [3, 5, 7]
+
+    # Ergebnisse für alle n-Werte sammeln
+    all_results = {}
+
+    for n in n_values:
+        results, specific_results = run_evaluation(
+            dynamic=False,
+            n_param=n
+        )
+        all_results[n] = results
+
+    # Durchschnitt über n = 3, 5, 7 berechnen
+    avg_results = {}
+
+    # Methoden aus dem ersten Lauf übernehmen
+    for method_name in all_results[n_values[0]]:
+        metrics = {
+            "precision": [],
+            "recall": [],
+            "iou": [],
+            "f1": [],
+            "coverage": []
+        }
+
+        for n in n_values:
+            overall = all_results[n][method_name]["overall"]
+
+            metrics["precision"].append(overall["precision"])
+            metrics["recall"].append(overall["recall"])
+            metrics["iou"].append(overall["iou"])
+            metrics["f1"].append(overall["f1"])
+
+            # Coverage als Anteil der nicht-leeren Ergebnisse
+            coverage = (
+                (overall["total"] - overall["empty"])
+                / overall["total"]
+                if overall["total"] > 0
+                else 0
+            )
+            metrics["coverage"].append(coverage)
+
+        # Mittelwerte berechnen
+        avg_results[method_name] = {
+            metric: sum(values) / len(values)
+            for metric, values in metrics.items()
+        }
+
+    # Einzelne Ergebnisse ausgeben
     def _print_results(title, res):
         print(f'========== {title} ==========')
+
         for method_name, method in res.items():
             o = method["overall"]
+
+            coverage = (
+                (o["total"] - o["empty"]) / o["total"]
+                if o["total"] > 0
+                else 0
+            )
+
             print(
-                f"  {method_name:10s}  P={o['precision']:.3f}  R={o['recall']:.3f}  "
-                f"IoU={o['iou']:.3f}  F1={o['f1']:.3f}  "
+                f"  {method_name:10s}  "
+                f"P={o['precision']:.3f}  "
+                f"R={o['recall']:.3f}  "
+                f"IoU={o['iou']:.3f}  "
+                f"F1={o['f1']:.3f}  "
                 f"| coverage={o['total'] - o['empty']}/{o['total']} "
                 f"(leer: {o['empty']})"
             )
 
-    _print_results("STATIC (n=3)", results)
-    _print_results("DYNAMIC (threshold=0.16)", results_dyn)
+    # Ergebnisse für jedes n
+    for n in n_values:
+        _print_results(f"STATIC (n={n})", all_results[n])
+
+    # Durchschnitt aus n=3,5,7
+    print()
+    print("========== STATIC (AVERAGE n=3,5,7) ==========")
+
+    for method_name, metrics in avg_results.items():
+        print(
+            f"  {method_name:10s}  "
+            f"P={metrics['precision']:.3f}  "
+            f"R={metrics['recall']:.3f}  "
+            f"IoU={metrics['iou']:.3f}  "
+            f"F1={metrics['f1']:.3f}  "
+            f"| coverage={metrics['coverage']:.3f}"
+        )

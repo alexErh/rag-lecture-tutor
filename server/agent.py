@@ -18,8 +18,8 @@ from langchain_core.messages import ToolMessage
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
-from chunking import ChunkingMethod
-from database import retrieve_chunks, retrieve_through_metadata, retrieve_chunks_dynamic
+from server.chunking import ChunkingMethod
+from server.database import retrieve_chunks, retrieve_through_metadata, retrieve_chunks_dynamic
 
 # .env laden (LOCAL, LOCAL_BASE_URL, LOCAL_MODEL_NAME, NVIDIA_API_KEY)
 load_dotenv()

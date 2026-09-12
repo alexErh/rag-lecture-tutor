@@ -20,9 +20,6 @@ _skript_data = [
     {'query': "Welche Probleme oder Konflikte können beim Mergen auftreten?",
      'ground_truth': "Werden jedoch verschiedene Änderungen zusammengeführt, die den gleichen Abschnitt einer Datei betreffen, so kommt es zu einem Merge-Konflikt."},
 
-    {'query': "Wie kann ein Merge-Konflikt gelöst werden?",
-     'ground_truth': "Dieser kann nur manuell aufgelöst werden."},
-
     {'query': "Welche Möglichkeiten gibt es eine Version einer Resource zu erstellen?",
      'ground_truth': "einerseits im lokalen Workspace und danach mit commit im Repsoitory, oder direkt in einem Branch im Repository."},
 
@@ -52,7 +49,7 @@ _skript_formula_data = [
     {"query":"Wie lautet die Formel / Gleichung für den Übergang von Licht von einem dünneren Medium in ein dickeres? ",
      "ground_truth": r"$$\frac { \sin \alpha } { \sin \beta } = c o n s t . = \frac { n _ { 2 } } { n _ { 1 } } = \frac { c _ { 1 } } { c _ { 2 } }$$"},
 
-    {"query": "Wie berechnet sich die Gleichspannung die bei dem Halleffekt entsteht?",
+        {"query": "Wie berechnet sich die Gleichspannung die bei dem Halleffekt entsteht?",
      "ground_truth": r"$$U _ { H } \sim \frac { I \cdot B } { d }$$"},
 
     {"query": "Welche Bedingungen unterscheiden lineare (ohmsche) von nichtlinearen Widerständen?",
@@ -130,6 +127,15 @@ _slides_data = [
         "query": "Wie wird im Projektmanagement mit den Kosten bzw. dem Budget eines Projekts umgegangen?",
         "ground_truth": "Das Projekt wird mit einem festen Budget gestartet.\nDieses Budget wird nachträglich nicht mehr gekürzt. Auch bei Anbietern von Festpreisprojekten wird in der Regel nicht während der Projektlaufzeit das für das Projekt verfügbare Budget gekürzt, um einen höheren Gewinn zu erzielen.\nDas Budget wird nicht ohne Grund erhöht.",
     },  # S. 23
+    {
+        "query": "Was sollte vor dem eigentlichen Projektstart organisatorisch und inhaltlich vorbereitet werden und wer sollte dabei eingebunden werden?",
+        "ground_truth": "## · Projektvorbereitung - Festlegung der Projektziele - Zusammenstellung der groben Projektplanung ...in Koordination mit dem Auftraggeber! - Zusammenstellung und Nutzen von Know-How aus früheren Tätigkeiten und Projekten - Möglichst Durchführung eines Start-Workshops gemeinsam mit Auftraggeber und Projektteam",
+    },
+
+    {
+        "query": "Wie wird sichergestellt, dass alle Projektaufgaben hinsichtlich Aufwand, Dauer, Reihenfolge und Verantwortlichkeit sinnvoll geplant und der daraus entstehende Ablauf während des Projekts aktuell gehalten wird?",
+        "ground_truth": "## Zeitmanagement (time management)-  Entwickeln einer Aktivitätenliste-  Zu jedem Teilprodukt laut WBS gehören eine oder mehrere Aufgaben (Aktivitäten, also Prozesse)-  (Zeit-) Aufwandsschätzung für die Aktivitäten-  Wie hoch ist der Aufwand (z.B. Personentage)?-  Wie lange dauert die Erledigung (Kalendertage)?-  Aufstellung eines Zeit- und Arbeitsplans (schedule)-  Wie hängen die Aufgaben von einander ab?-  Wer erledigt von wann bis wann welche Aktivität?-  Zeitplanüberwachung (schedule control)-  Wird der Plan eingehalten?-  Kontinuierliche Fortschreibung des Zeitplans",
+    }
 ]
 
 def get_slides_data() -> list[dict[str, str]]:
