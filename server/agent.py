@@ -18,8 +18,8 @@ from langchain_core.messages import ToolMessage
 from langchain_ollama import ChatOllama
 from langchain_openai import ChatOpenAI
 
-from chunking import ChunkingMethod
-from database import retrieve_chunks, retrieve_through_metadata
+from server.chunking import ChunkingMethod
+from server.database import retrieve_chunks, retrieve_through_metadata, retrieve_chunks_dynamic
 
 # .env laden (LOCAL, LOCAL_BASE_URL, LOCAL_MODEL_NAME, NVIDIA_API_KEY)
 load_dotenv()
@@ -32,6 +32,8 @@ load_dotenv()
 _request_method: contextvars.ContextVar = contextvars.ContextVar(
     "request_method", default=None
 )
+
+DYNAMIC_RETREIVAL = os.getenv('DYNAMIC_RETREIVAL',default='False').strip().lower() in ['True', 'true', '1', 'yes', 'ja']
 
 
 SYSTEM_PROMPT = (
@@ -116,7 +118,11 @@ def _format_hits(documents, metadatas, distances=None):
 def search_lecture_docs(query: str):
     """Holt die passenden Chunks per semantischer Suche aus der Vektor-DB."""
     method = _request_method.get()
-    results = retrieve_chunks(query, 5, method=method)
+    print("Chunking Method:\t", method)
+    if DYNAMIC_RETREIVAL:
+        results = retrieve_chunks_dynamic(query=query, method=method)
+    else:
+        results = retrieve_chunks(query, 5, method=method)
     # collection.query liefert je Abfrage verschachtelte Listen -> [0].
     documents = results["documents"][0] if results["documents"] else []
     metadatas = results["metadatas"][0] if results["metadatas"] else []

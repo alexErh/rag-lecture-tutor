@@ -4,20 +4,26 @@ Kapselt den ChromaDB-Client, die Collection und das Embedding-Modell sowie die
 Funktionen zum Hinzufügen und Abrufen von Chunks. Das Chunking selbst liegt in
 chunking.py.
 """
-
-import hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor dem Embedding-Modell
-
+from chromadb import QueryResult
+import server.hf_offline  # noqa: F401 -- MUSS zuerst stehen: HF-Offline vor dem Embedding-Modell
+from collections import Counter
 import hashlib
+import os
 import uuid
 from pathlib import Path
 
 import chromadb
 from chromadb.utils import embedding_functions
 
-from chunking import (
+# Debug-Ausgaben (Retrieval-Logs) nur bei DEBUG=true – sonst überfluten sie z. B.
+# die Evaluation. Konsistent zum Flag in agent.py.
+DEBUG = os.getenv("DEBUG", "false").strip().lower() in ("1", "true", "yes", "ja")
+
+from server.chunking import (
     chunk_file,
     embed_query_late,
     ChunkingMethod,
+    EMBEDDING_MODEL,
     LATE_EMBEDDING_MODEL,
     PROCESSED_DIR,
 )
@@ -30,11 +36,12 @@ from chunking import (
 _BASE_DIR = Path(__file__).resolve().parent
 client = chromadb.PersistentClient(path=str(_BASE_DIR / "VectorDB"))
 
-# Mehrsprachiges Embedding-Modell – passend für deutschsprachige Vorlesungen
-# (Chromas Default all-MiniLM-L6-v2 ist englischlastig). Läuft lokal; das Modell
-# wird beim ersten Aufruf einmalig heruntergeladen.
+# Gemeinsames, mehrsprachiges Embedding-Modell für alle text-basierten Methoden
+# (Option A: derselbe Vektorraum wie Late -> vergleichbare Distanzen, eine faire
+# Schwelle). Zentral in chunking.EMBEDDING_MODEL definiert. Läuft lokal; das Modell
+# wird beim ersten Aufruf einmalig geladen.
 embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-    model_name="sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    model_name=EMBEDDING_MODEL
 )
 
 collection = client.get_or_create_collection(
@@ -83,8 +90,8 @@ def add_document(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECU
     # Nur Chunks derselben Quelle UND Methode entfernen (keine Duplikate).
     try:
         target.delete(where={"$and": [{"source": path}, {"method": method.value}]})
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"[FEHLER] target.delete:  {e}")
 
     if not records:
         return 0
@@ -122,7 +129,8 @@ def _is_late(method: "str | ChunkingMethod | None") -> bool:
 # Bekommt den Prompt als Query und gibt die passenden Chunks zurück
 def retrieve_chunks(query: str, n: int = 3, method: "str | ChunkingMethod | None" = None):
     # LATE: eigene Collection, Query mit demselben Late-Modell embedden (gleicher Raum).
-    print("Retrieving chunks...\n", "Chunking Method:\t", method)
+    if DEBUG:
+        print("Retrieving chunks...\n", "Chunking Method:\t", method)
     if _is_late(method):
         return _late_collection().query(
             query_embeddings=[embed_query_late(query)],
@@ -134,6 +142,47 @@ def retrieve_chunks(query: str, n: int = 3, method: "str | ChunkingMethod | None
         n_results=n,
         where=_method_filter(method),
     )
+
+def retrieve_chunks_dynamic(query: str, thresh_hold: float = 0.4, method: "str | ChunkingMethod | None" = None) -> QueryResult:
+    # LATE: eigene Collection, Query mit demselben Late-Modell embedden (gleicher Raum).
+    #print("Retrieving chunks...\n", "Chunking Method:\t", method)
+    query_result: QueryResult
+    if _is_late(method):
+        query_result = _late_collection().query(
+            query_embeddings=[embed_query_late(query)],
+            n_results=5000,
+        )
+    else:
+        # Sonst: Standard-Collection; method=None -> alle, sonst nur die gewählte Methode.
+        query_result = collection.query(
+            query_texts=[query],
+            n_results=5000,
+            where=_method_filter(method),
+        )
+    documents = query_result["documents"][0]
+    distances = query_result["distances"][0]
+    ids = query_result["ids"][0]
+    metadatas = query_result.get("metadatas", [[]])[0]
+    if DEBUG:
+        print(f"{method}: Chunks retrieved: {len(documents)}")
+    filtered = [
+        (doc, distance, id_, metadata)
+        for doc, distance, id_, metadata in zip(
+            documents, distances, ids, metadatas
+        )
+        if distance <= thresh_hold
+    ]
+
+    tmp_result: QueryResult = {
+        "documents": [[x[0] for x in filtered]],
+        "distances": [[x[1] for x in filtered]],
+        "ids": [[x[2] for x in filtered]],
+        "metadatas": [[x[3] for x in filtered]],
+    }
+    if DEBUG:
+        print(f"{method}: Chunks after distance filtering (threshold={thresh_hold}): {len(filtered)}")
+    return tmp_result
+
 
 
 def retrieve_through_metadata(filename: str, method: "str | ChunkingMethod | None" = None):
@@ -189,11 +238,69 @@ def add_all(method: "str | ChunkingMethod" = ChunkingMethod.RECURSIVE):
         f"Collection-Gesamt: {target.count()}"
     )
     return results
+def count_chunks_by_file_and_method():
+    results = []
 
+    # Standard-Collection
+    data = collection.get(include=["metadatas"])
+
+    for metadata in data["metadatas"]:
+        if metadata:
+            results.append({
+                "source": metadata.get("source", "unknown"),
+                "method": metadata.get("method", "unknown"),
+            })
+
+    # LATE-Collection
+    late_data = _late_collection().get(include=["metadatas"])
+
+    for metadata in late_data["metadatas"]:
+        if metadata:
+            results.append({
+                "source": metadata.get("source", "unknown"),
+                "method": metadata.get("method", "unknown"),
+            })
+
+    # Zählen
+    counts = Counter(
+        (item["source"], item["method"])
+        for item in results
+    )
+
+    print("\n========== CHUNK-ANZAHLEN ==========")
+
+    for (source, method), count in sorted(counts.items()):
+        print(
+            f"{Path(source).name:35} | "
+            f"{method:20} | "
+            f"{count:5} Chunks"
+        )
+
+    return counts
 
 if __name__ == "__main__":
+
     # add_all einmal pro Chunking-Methode aufrufen (insgesamt vier Läufe:
     # recursive, markdown, semantic, late). Alle Methoden koexistieren in der DB.
+    #for method in ChunkingMethod:
+        #print(f"\n{'=' * 70}\nMethode: {method.value}\n{'=' * 70}")
+        #add_all(method)
+
+
+    #count_chunks_by_file_and_method()
+    import sys
+
+    # Optionales Methoden-Argument, z. B.:  python database.py markdown
+    #chosen = sys.argv[1] if len(sys.argv) > 1 else ChunkingMethod.RECURSIVE
+    #add_all(chosen)
     for method in ChunkingMethod:
-        print(f"\n{'=' * 70}\nMethode: {method.value}\n{'=' * 70}")
-        add_all(method)
+        add_document("data/processed/SoftwareEngineering.md", method=method)
+        add_document("data/processed/PM-01-Einfuehrung.md", method=method)
+        add_document("data/processed/ti1-1-45.md", method=method)
+
+# recursive: Chunks retrieved: 2159
+
+
+
+
+
