@@ -22,6 +22,7 @@ DEBUG = os.getenv("DEBUG", "false").strip().lower() in ("1", "true", "yes", "ja"
 from server.chunking import (
     chunk_file,
     embed_query_late,
+    pdf_source,
     ChunkingMethod,
     EMBEDDING_MODEL,
     LATE_EMBEDDING_MODEL,
@@ -88,8 +89,9 @@ def add_document(path: str, method: "str | ChunkingMethod" = ChunkingMethod.RECU
     target = _late_collection() if is_late else collection
 
     # Nur Chunks derselben Quelle UND Methode entfernen (keine Duplikate).
+    # Quelle wird als .pdf gespeichert (siehe pdf_source) -> Filter muss denselben Wert nutzen.
     try:
-        target.delete(where={"$and": [{"source": path}, {"method": method.value}]})
+        target.delete(where={"$and": [{"source": pdf_source(path)}, {"method": method.value}]})
     except Exception as e:
         print(f"[FEHLER] target.delete:  {e}")
 

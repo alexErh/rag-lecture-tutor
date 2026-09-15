@@ -58,8 +58,8 @@ SYSTEM_PROMPT = (
     "Wann immer du Informationen aus search_lecture_docs oder get_file_info nutzt, nenne "
     "am Ende die Quelle(n). Verwende NUR den Dateinamen aus dem Feld 'source' (ohne "
     "Verzeichnispfad) und, falls das Feld 'page' vorhanden (nicht null) ist, die Seite:\n"
-    "- mit Seite:  *Quelle*: `08_LinAbb.md`, S. 7\n"
-    "- ohne Seite: *Quelle*: `08_LinAbb.md`\n"
+    "- mit Seite:  *Quelle*: `08_LinAbb.pdf`, S. 7\n"
+    "- ohne Seite: *Quelle*: `08_LinAbb.pdf`\n"
     "Nutzt du mehrere Dateien oder Seiten, liste alle als eigene Quellenzeilen.\n\n"
 
     "# Format & Sprache\n"

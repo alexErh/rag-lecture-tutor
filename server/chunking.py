@@ -260,6 +260,14 @@ def _page_at(offset: int, boundaries: "list[tuple[int, int]]") -> "int | None":
     return page
 
 
+def pdf_source(path: str) -> str:
+    """Quelle als PDF-Dateiname ableiten: die tatsächliche Quelle ist die PDF, nicht
+    das daraus erzeugte Markdown. Es wird nur die Endung .md -> .pdf getauscht; der
+    übrige Pfad (inkl. Trennzeichen) bleibt unverändert."""
+    root, _ = os.path.splitext(path)
+    return root + ".pdf"
+
+
 def _late_chunks(text: str, path: str) -> "list[ChunkRecord]":
     """Late Chunking über das ganze Dokument; Seite via Zeichen-Offset zugeordnet."""
     _, chunker = _get_late()
@@ -267,7 +275,7 @@ def _late_chunks(text: str, path: str) -> "list[ChunkRecord]":
 
     records: list[ChunkRecord] = []
     for chunk in chunker.chunk(clean_text):
-        metadata = {"source": path, "method": ChunkingMethod.LATE.value}
+        metadata = {"source": pdf_source(path), "method": ChunkingMethod.LATE.value}
         page = _page_at(chunk.start_index, boundaries)
         if page is not None:
             metadata["page"] = page
@@ -334,7 +342,7 @@ def chunk_file(
 
         # ... Formeln je Chunk wiederherstellen und als ChunkRecord sammeln.
         for chunk in chunks:
-            metadata = {"source": path, "method": method.value}
+            metadata = {"source": pdf_source(path), "method": method.value}
             if page_no is not None:
                 metadata["page"] = page_no
             records.append(
@@ -385,5 +393,5 @@ if __name__ == "__main__":
     import sys
 
     # Optionales Methoden-Argument, z. B.:  python chunking.py markdown
-    chosen = sys.argv[1] if len(sys.argv) > 1 else ChunkingMethod.MARKDOWN
+    chosen = sys.argv[1] if len(sys.argv) > 1 else ChunkingMethod.SEMANTIC
     chunk_all(chosen)
