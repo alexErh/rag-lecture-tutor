@@ -233,7 +233,7 @@ def models():
 # ==========================================
 
 if __name__ == "__main__":
-    OPEN_WEBUI = True
+    OPEN_WEBUI = False
     import uvicorn
     if OPEN_WEBUI:
         ip = "0.0.0.0"
