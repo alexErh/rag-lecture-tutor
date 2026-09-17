@@ -178,7 +178,7 @@ def ingest(
     }
 
 
-# ============ OPEN WEBUI TEST =============
+# ============ OPEN WEBUI =============
 from typing import List, Optional
 from fastapi.responses import StreamingResponse
 
@@ -233,7 +233,8 @@ def models():
 # ==========================================
 
 if __name__ == "__main__":
-    OPEN_WEBUI = True
+    # Wenn man Open WebUI hat kann man auf True stellen
+    OPEN_WEBUI = False
     import uvicorn
     if OPEN_WEBUI:
         ip = "0.0.0.0"
